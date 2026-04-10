@@ -1,0 +1,29 @@
+{
+  "skill_name": "chrome-cdp-manager",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "复用我已经开着的 Chrome，不要丢登录状态。",
+      "expected_output": "检测到现有 CDP 端口后直接复用，并返回 attach 所需 JSON。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "如果当前没有可复用的 Chrome，就用固定 profile 启动一个支持 remote debugging 的实例。",
+      "expected_output": "启动新 Chrome，回写状态文件，并返回新的 CDP 连接信息。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "端口文件还在，但那个 Chrome 已经死了，帮我自动恢复。",
+      "expected_output": "识别失效状态，重启 Chrome 并刷新 session.json。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "两个自动化任务同时来时，不要启动两个 Chrome。",
+      "expected_output": "通过锁避免重复启动，最终只复用同一个 CDP 实例。",
+      "files": []
+    }
+  ]
+}

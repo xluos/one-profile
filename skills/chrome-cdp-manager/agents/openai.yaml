@@ -1,0 +1,3 @@
+display_name: Chrome CDP Manager
+short_description: Reuse or launch a persistent Chrome CDP instance
+default_prompt: Reuse the managed Chrome profile if available, otherwise start Chrome with remote debugging and return the attachable CDP endpoint as JSON.
