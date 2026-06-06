@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+  SOURCE_TARGET="$(readlink "${SOURCE}")"
+  if [[ "${SOURCE_TARGET}" == /* ]]; then
+    SOURCE="${SOURCE_TARGET}"
+  else
+    SOURCE="${SOURCE_DIR}/${SOURCE_TARGET}"
+  fi
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENSURE_SCRIPT="${REPO_DIR}/skills/chrome-cdp-manager/scripts/ensure_chrome_cdp.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  cdp-chrome [url]
+  cdp-chrome --json [url]
+
+Open or reuse the managed Chrome debugging profile:
+  profile: ~/.agents-profile/main/chrome-profile
+  CDP:     http://127.0.0.1:9222
+
+If url is provided, a new tab is opened through the CDP endpoint.
+EOF
+}
+
+PRINT_JSON=false
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  --json)
+    PRINT_JSON=true
+    shift
+    ;;
+esac
+
+if [[ ! -x "${ENSURE_SCRIPT}" ]]; then
+  echo "missing executable: ${ENSURE_SCRIPT}" >&2
+  exit 1
+fi
+
+RESULT="$("${ENSURE_SCRIPT}")"
+
+if [[ "${PRINT_JSON}" == "true" ]]; then
+  printf '%s\n' "${RESULT}"
+fi
+
+if [[ $# -gt 0 ]]; then
+  python3 - "$RESULT" "$1" <<'PY'
+import json
+import sys
+import urllib.parse
+import urllib.request
+
+result = json.loads(sys.argv[1])
+raw_url = sys.argv[2]
+
+if raw_url.startswith(("http://", "https://", "file://", "chrome://", "about:")):
+    url = raw_url
+elif raw_url.startswith(("localhost", "127.0.0.1", "[::1]")):
+    url = "http://" + raw_url
+else:
+    url = "https://" + raw_url
+
+port = int(result["port"])
+safe_chars = ":/?#[]@!$&'()*+,;=%"
+encoded_url = urllib.parse.quote(url, safe=safe_chars)
+target_url = f"http://127.0.0.1:{port}/json/new?{encoded_url}"
+request = urllib.request.Request(target_url, method="PUT")
+with urllib.request.urlopen(request, timeout=2) as response:
+    response.read()
+print(url)
+PY
+fi
+
+if [[ "${PRINT_JSON}" != "true" ]]; then
+  python3 - "$RESULT" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+state = "reused" if data.get("reused") else "started"
+print(f"Chrome CDP {state}: http://127.0.0.1:{data['port']}")
+print(f"Profile: {data['profile_dir']}")
+PY
+fi

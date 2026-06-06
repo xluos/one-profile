@@ -126,7 +126,7 @@ probe_cdp() {
   local port="$1"
   local response
 
-  response="$(curl --silent --show-error --max-time 1 "http://127.0.0.1:${port}/json/version" || true)"
+  response="$(curl --silent --max-time 1 "http://127.0.0.1:${port}/json/version" || true)"
   if [[ -z "${response}" ]]; then
     return 1
   fi
@@ -212,13 +212,40 @@ launch_chrome() {
   local chrome_path="$2"
 
   : > "${LAUNCH_LOG}"
-  "${chrome_path}" \
+
+  if [[ "$(uname)" == "Darwin" && "${chrome_path}" == *"/Contents/MacOS/"* ]]; then
+    local app_path="${chrome_path%/Contents/MacOS/*}"
+    open -n -a "${app_path}" --args \
+      --remote-debugging-port="${port}" \
+      --user-data-dir="${PROFILE_DIR}" \
+      --no-first-run \
+      --no-default-browser-check \
+      >>"${LAUNCH_LOG}" 2>&1
+
+    local waited=0
+    local found_pid=""
+    while (( waited < 40 )); do
+      found_pid="$(pgrep -f -- "--user-data-dir=${PROFILE_DIR}" | head -n 1 || true)"
+      if [[ -n "${found_pid}" ]]; then
+        echo "${found_pid}"
+        return 0
+      fi
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+
+    echo "0"
+    return 0
+  fi
+
+  nohup "${chrome_path}" \
     --remote-debugging-port="${port}" \
     --user-data-dir="${PROFILE_DIR}" \
     --no-first-run \
     --no-default-browser-check \
-    >>"${LAUNCH_LOG}" 2>&1 &
+    </dev/null >>"${LAUNCH_LOG}" 2>&1 &
 
+  disown "$!" 2>/dev/null || true
   echo $!
 }
 
@@ -287,10 +314,27 @@ PY
   fi
 
   cleanup_stale_state
+
+  local existing_pids
+  existing_pids="$(profile_in_use 2>/dev/null || true)"
+  if [[ -n "${existing_pids}" ]]; then
+    echo "profile ${PROFILE_DIR} is already in use by Chrome (pid: $(echo "${existing_pids}" | tr '\n' ' '))" >&2
+    echo "but no reachable CDP endpoint was found in ${SESSION_FILE}." >&2
+    echo "close that Chrome instance, or delete ${SESSION_FILE} after confirming the running Chrome exposes CDP." >&2
+    exit 1
+  fi
+
   cleanup_profile_singletons >/dev/null 2>&1 || true
 
-  local port
-  port="$(choose_free_port "${PREFERRED_PORT}")"
+  local port="${PREFERRED_PORT}"
+  if ! port_is_free "${port}"; then
+    if probe_cdp "${port}" >/dev/null 2>&1; then
+      echo "port ${port} is occupied by a different CDP endpoint (not the managed Chrome). Stop that instance or run without this skill." >&2
+    else
+      echo "port ${port} is occupied by a non-CDP process. Free port ${port} before running this skill." >&2
+    fi
+    exit 1
+  fi
 
   local pid
   pid="$(launch_chrome "${port}" "${chrome_path}")"
@@ -303,6 +347,11 @@ PY
     echo "launch log: ${LAUNCH_LOG}" >&2
     exit 1
   }
+
+  if ! pid_is_running "${pid}"; then
+    pid="$(pgrep -f -- "--user-data-dir=${PROFILE_DIR}" | head -n 1 || true)"
+    pid="${pid:-0}"
+  fi
 
   local ws_url
   ws_url="$(python3 - "${probe_payload}" <<'PY'

@@ -47,6 +47,23 @@ skills/chrome-cdp-manager/
 
 如果你只是想先单独拉起浏览器，自己完成登录、授权、二次验证之类的操作，再把状态留给后续 Agent 复用，当前逻辑已经够用，不需要额外功能。
 
+更短的入口是：
+
+```bash
+cdp-chrome
+```
+
+也可以顺手打开一个页面：
+
+```bash
+cdp-chrome http://localhost:8080
+```
+
+这个命令会复用同一个 profile 和固定 CDP 端口：
+
+- profile: `~/.agents-profile/main/chrome-profile`
+- CDP: `http://127.0.0.1:9222`
+
 直接运行：
 
 ```bash
