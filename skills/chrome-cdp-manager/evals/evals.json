@@ -3,24 +3,36 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "复用我已经开着的 Chrome，不要丢登录状态。",
-      "expected_output": "检测到现有 CDP 端口后直接复用，并返回 attach 所需 JSON。",
+      "prompt": "Chrome 里的 Codex 插件已经连通，直接接管我现有的登录态标签页。",
+      "expected_output": "实际探测扩展 browser binding 与 openTabs；健康时直接走扩展控制，不启动或复用 CDP fallback。",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "如果当前没有可复用的 Chrome，就用固定 profile 启动一个支持 remote debugging 的实例。",
-      "expected_output": "启动新 Chrome，回写状态文件，并返回新的 CDP 连接信息。",
+      "prompt": "Chrome 插件连不上，复用我已经开着的受管 Chrome，不要丢登录状态。",
+      "expected_output": "确认扩展不可恢复后，校验 MCP 固定绑定 9222，再检测并复用受管 CDP，返回连接 JSON。",
       "files": []
     },
     {
       "id": 3,
+      "prompt": "复用我已经开着的 Chrome，不要丢登录状态。",
+      "expected_output": "先探测扩展控制；扩展健康时使用扩展，只有扩展不可用时才检测受管 CDP。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "如果当前没有可复用的 Chrome，就用固定 profile 启动一个支持 remote debugging 的实例。",
+      "expected_output": "在扩展不可用且 MCP 配置已绑定 9222 时，启动新 Chrome、回写状态文件并返回 CDP 连接信息。",
+      "files": []
+    },
+    {
+      "id": 5,
       "prompt": "端口文件还在，但那个 Chrome 已经死了，帮我自动恢复。",
       "expected_output": "识别失效状态，重启 Chrome 并刷新 session.json。",
       "files": []
     },
     {
-      "id": 4,
+      "id": 6,
       "prompt": "两个自动化任务同时来时，不要启动两个 Chrome。",
       "expected_output": "通过锁避免重复启动，最终只复用同一个 CDP 实例。",
       "files": []

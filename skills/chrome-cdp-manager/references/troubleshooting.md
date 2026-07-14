@@ -9,8 +9,22 @@ Symptom: `http://127.0.0.1:<port>/json/version` fails or returns non-JSON.
 Action:
 
 - Treat the port as stale.
-- Pick another free port.
-- Rewrite `.cdp-port` and `session.json` only after the new CDP endpoint is ready.
+- Free port 9222; do not pick another port because MCP clients use the fixed endpoint.
+- Rewrite `.cdp-port` and `session.json` only after the managed endpoint is ready.
+
+### An MCP launches another Chrome after reuse succeeds
+
+Symptom: `ensure_chrome_cdp.sh` returns `reused: true`, but another Chrome appears with `--remote-debugging-pipe` and a profile such as `~/.cache/chrome-devtools-mcp/chrome-profile`.
+
+Cause: the MCP process started without the fixed CDP endpoint. Reusing 9222 does not redirect an already misconfigured MCP process.
+
+Action:
+
+- Run `scripts/verify_mcp_cdp_config.py --client <host>`.
+- Configure `chrome-devtools-mcp` with `--browserUrl http://127.0.0.1:9222`.
+- Configure `@playwright/mcp` with `--cdp-endpoint http://127.0.0.1:9222`.
+- Restart the MCP host so existing server processes reload their arguments.
+- Stop the pipe-launched Chrome only after confirming it has no work that must be preserved.
 
 ### Chrome exits immediately
 

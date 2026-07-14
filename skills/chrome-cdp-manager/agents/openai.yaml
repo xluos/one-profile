@@ -1,3 +1,4 @@
-display_name: Chrome CDP Manager
-short_description: Reuse or launch a persistent Chrome CDP instance
-default_prompt: Reuse the managed Chrome profile if available, otherwise start Chrome with remote debugging and return the attachable CDP endpoint as JSON.
+interface:
+  display_name: "Chrome Control Router"
+  short_description: "Prefer Chrome extension, fall back to managed CDP"
+  default_prompt: "Use $chrome-cdp-manager to control Chrome through the connected extension, falling back to the managed CDP profile only when needed."

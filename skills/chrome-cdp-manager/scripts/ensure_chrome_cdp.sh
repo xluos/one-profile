@@ -45,6 +45,41 @@ pid_is_running() {
   kill -0 "${pid}" >/dev/null 2>&1
 }
 
+find_managed_pid() {
+  local port="$1"
+  python3 - "${PROFILE_DIR}" "${port}" <<'PY'
+import subprocess
+import sys
+
+profile_dir = sys.argv[1]
+port = sys.argv[2]
+
+try:
+    output = subprocess.check_output(
+        ["ps", "-axww", "-o", "pid=", "-o", "command="],
+        text=True,
+    )
+except Exception:
+    sys.exit(1)
+
+profile_arg = f"--user-data-dir={profile_dir}"
+port_arg = f"--remote-debugging-port={port}"
+for line in output.splitlines():
+    line = line.strip()
+    if not line or "Google Chrome Helper" in line:
+        continue
+    parts = line.split(None, 1)
+    if len(parts) != 2:
+        continue
+    pid, command = parts
+    if profile_arg in command and port_arg in command:
+        print(pid)
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 profile_in_use() {
   python3 - "${PROFILE_DIR}" <<'PY'
 import subprocess
@@ -280,7 +315,9 @@ main() {
   if existing_port="$(read_port_from_state 2>/dev/null || true)"; then
     if [[ -n "${existing_port}" ]]; then
       probe_payload="$(probe_cdp "${existing_port}" || true)"
-      if [[ -n "${probe_payload}" ]]; then
+      local managed_pid=""
+      managed_pid="$(find_managed_pid "${existing_port}" 2>/dev/null || true)"
+      if [[ -n "${probe_payload}" && -n "${managed_pid}" ]]; then
         local ws_url
         ws_url="$(python3 - "${probe_payload}" <<'PY'
 import json
@@ -288,26 +325,8 @@ import sys
 print(json.loads(sys.argv[1])["ws_url"])
 PY
 )"
-        local pid
-        pid="$(python3 - "${SESSION_FILE}" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-if not path.exists():
-    print(0)
-    sys.exit(0)
-try:
-    data = json.loads(path.read_text())
-except Exception:
-    print(0)
-    sys.exit(0)
-print(int(data.get("pid") or 0))
-PY
-)"
-        write_state "${existing_port}" "${ws_url}" "${chrome_path}" "${pid:-0}"
-        emit_result "${existing_port}" "${ws_url}" "${chrome_path}" "${pid:-0}" true
+        write_state "${existing_port}" "${ws_url}" "${chrome_path}" "${managed_pid}"
+        emit_result "${existing_port}" "${ws_url}" "${chrome_path}" "${managed_pid}" true
         return 0
       fi
     fi
