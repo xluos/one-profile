@@ -84,6 +84,8 @@ skills/chrome-cdp-manager/scripts/ensure_chrome_cdp.sh
 3. Chrome 会把登录状态和本地数据写到 `chrome-profile/`
 4. 脚本会把端口和会话信息写到 `.cdp-port` 与 `session.json`
 
+`.cdp-port` 和 `session.json` 只是可重建缓存。如果 Chrome 仍以受管 profile 和 `--remote-debugging-port=9222` 运行，但这两个文件丢失、损坏或记录了旧 PID，脚本会从真实进程与 `/json/version` 反向发现当前会话并原地重建状态，不会要求先关闭浏览器。
+
 你这时可以直接在弹出的 Chrome 窗口里完成登录。之后再次运行同一个脚本，或让 Agent 复用这个目录时，就会优先 attach 到已有实例，或者在浏览器关闭后用同一个 profile 重启。
 
 注意：
@@ -111,6 +113,8 @@ skills/chrome-cdp-manager/scripts/ensure_chrome_cdp.sh
 
 当前实现已经覆盖这些恢复路径：
 
+- `session.json` 和 `.cdp-port` 同时缺失，但受管 Chrome 与 9222 仍然健康
+- `session.json` 损坏或记录旧 PID，通过固定端口和真实进程重新归一化
 - `.cdp-port` 存在，但端口不可用
 - `session.json` 残留，但对应 Chrome 已经退出
 - `chrome-profile/` 下残留 `SingletonLock`、`SingletonCookie`、`SingletonSocket`
@@ -142,9 +146,19 @@ npx skills add xluos/one-profile --all -g -y
 
 ## 本地验证
 
+运行确定性的状态恢复回归：
+
+```bash
+skills/chrome-cdp-manager/tests/test_ensure_chrome_cdp.sh
+```
+
 当前仓库已经做过这些验证：
 
 - shell 脚本语法检查
+- 状态文件全部缺失时，从健康的 9222 受管实例自愈
+- `session.json` 损坏时回退到端口缓存并重写
+- 首次 CDP 探测短暂失败时等待同一实例恢复
+- profile 被非预期 Chrome 占用时保留诊断状态并拒绝误启动
 - 空 profile 目录首次启动
 - 第二次调用复用已有实例
 - 伪造失效 `session.json` 和残留锁文件后的恢复

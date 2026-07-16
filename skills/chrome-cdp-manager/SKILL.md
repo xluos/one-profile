@@ -1,6 +1,6 @@
 ---
 name: chrome-cdp-manager
-description: Prefer a healthy Codex/ChatGPT Chrome extension connection, otherwise reuse or start a managed Chrome with a persistent profile on CDP port 9222. Use when browser automation needs an existing Chrome tab, login state, a persistent profile, or a fallback connection through chrome-devtools or Playwright.
+description: Prefer a healthy Codex/ChatGPT Chrome extension connection; otherwise recover, reuse, or start a managed Chrome with a persistent profile on CDP port 9222. Use when browser automation needs an existing Chrome tab, login state, a persistent profile, stale-state recovery, or a fallback connection through chrome-devtools or Playwright.
 ---
 
 # Chrome CDP Manager
@@ -41,14 +41,14 @@ The managed state directory is fixed to `~/.agents-profile/main/`.
 - Session file: `~/.agents-profile/main/session.json`
 - Lock dir: `~/.agents-profile/main/.launch.lock`
 
-Treat `session.json` as the source of truth. `.cdp-port` is only a fast path for reconnect.
+Treat `session.json` and `.cdp-port` as rebuildable caches, not as the source of truth. The live endpoint on fixed port 9222 plus a Chrome main process whose arguments match both the managed profile and port are authoritative. If either cache is missing, corrupt, or stale, rediscover that live process and rewrite both files.
 
 ## Port contract
 
 The CDP address is **fixed to `http://127.0.0.1:9222`**. Keep the responsibilities separate:
 
 - MCP configuration routes `chrome-devtools` and Playwright to the fixed address. For Codex, configure `~/.codex/config.toml` with `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222` and `@playwright/mcp --cdp-endpoint http://127.0.0.1:9222`.
-- This skill provisions and reuses the managed Chrome and profile behind that address.
+- This skill provisions, rediscovers, and reuses the managed Chrome and profile behind that address.
 
 Do not assume the MCP binding exists just because Chrome is reachable. Before using an MCP client in a new host or after its configuration changes, run `scripts/verify_mcp_cdp_config.py --client <codex|claude|cursor>`. If validation fails, stop and report the missing binding. Do not call the unbound MCP because its default behavior may launch a separate Chrome through `remote-debugging-pipe`.
 
@@ -58,9 +58,9 @@ The skill must guarantee that 9222 is either serving the managed Chrome or is fr
 
 1. Probe the Chrome extension path as described above. If it is healthy, use it and stop this workflow.
 2. For CDP fallback, identify the current MCP host. Run `scripts/verify_mcp_cdp_config.py --client <host>` before the first MCP browser-tool call in that host or after its configuration changes.
-3. Run `scripts/ensure_chrome_cdp.sh`.
-4. Parse its JSON output.
-5. If `reused` is `true`, the managed Chrome is already running on 9222. Call the configured MCP tools directly.
+3. Run `scripts/ensure_chrome_cdp.sh` and parse its JSON output.
+4. The script first probes cached state. If the caches are unusable, it probes fixed port 9222 and verifies the live Chrome main process against the managed profile and port arguments.
+5. If `reused` is `true`, the existing managed Chrome was found and both cache files are normalized. Call the configured MCP tools directly.
 6. If `reused` is `false`, a fresh managed Chrome was started on 9222. Call the configured MCP tools after the endpoint becomes ready.
 7. If either fallback script exits non-zero, surface the error. Do not use an unbound MCP, `open -a`, a different port, or any path that bypasses the managed profile.
 
@@ -68,8 +68,10 @@ The skill must guarantee that 9222 is either serving the managed Chrome or is fr
 
 - Always use the managed custom profile directory. Do not use the user's default daily-browsing Chrome profile.
 - Port is fixed to 9222. Never pick an alternative port.
-- Probe the stored port before reusing it.
+- Probe cached state first, then probe fixed port 9222 directly before deciding that no reusable endpoint exists.
+- Require both a valid Chrome CDP response and a matching Chrome main process before rebuilding state or returning `reused: true`.
 - If the stored state is stale but 9222 is free, start a fresh Chrome instance and rewrite the state files.
+- Do not delete diagnostic state while the profile is still in use; classify the live process first and report the actual mismatch.
 - Prevent duplicate launches with the lock dir.
 - Return structured JSON so callers do not parse logs.
 - Configure the stable HTTP endpoint at MCP process startup; never hardcode the rotating `webSocketDebuggerUrl` from `session.json`.

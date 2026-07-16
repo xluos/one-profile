@@ -36,6 +36,12 @@
       "prompt": "两个自动化任务同时来时，不要启动两个 Chrome。",
       "expected_output": "通过锁避免重复启动，最终只复用同一个 CDP 实例。",
       "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Chrome 持久 profile 正在使用，9222 也能返回 /json/version，但 session.json 和 .cdp-port 都丢了，帮我恢复，别关浏览器。",
+      "expected_output": "把状态文件视为缓存，直接验证固定 9222 的 CDP 响应与 managed Chrome 主进程参数；匹配后原地重建两个状态文件并返回 reused=true。",
+      "files": []
     }
   ]
 }

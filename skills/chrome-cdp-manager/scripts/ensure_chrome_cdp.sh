@@ -128,8 +128,9 @@ cleanup_profile_singletons() {
 }
 
 read_port_from_state() {
+  local session_port=""
   if [[ -f "${SESSION_FILE}" ]]; then
-    python3 - "${SESSION_FILE}" <<'PY'
+    session_port="$(python3 - "${SESSION_FILE}" <<'PY' || true
 import json
 import pathlib
 import sys
@@ -146,7 +147,11 @@ if isinstance(port, int):
     sys.exit(0)
 sys.exit(1)
 PY
-    return
+)"
+    if [[ -n "${session_port}" ]]; then
+      printf '%s\n' "${session_port}"
+      return 0
+    fi
   fi
 
   if [[ -f "${PORT_FILE}" ]]; then
@@ -190,17 +195,20 @@ write_state() {
   local ws_url="$2"
   local chrome_path="$3"
   local pid="$4"
-  python3 - "${SESSION_FILE}" "${port}" "${ws_url}" "${PROFILE_DIR}" "${chrome_path}" "${pid}" <<'PY'
+  python3 - "${SESSION_FILE}" "${PORT_FILE}" "${port}" "${ws_url}" "${PROFILE_DIR}" "${chrome_path}" "${pid}" <<'PY'
 import json
+import os
 import pathlib
 import sys
+import tempfile
 
 session_file = pathlib.Path(sys.argv[1])
-port = int(sys.argv[2])
-ws_url = sys.argv[3]
-profile_dir = sys.argv[4]
-chrome_path = sys.argv[5]
-pid = int(sys.argv[6])
+port_file = pathlib.Path(sys.argv[2])
+port = int(sys.argv[3])
+ws_url = sys.argv[4]
+profile_dir = sys.argv[5]
+chrome_path = sys.argv[6]
+pid = int(sys.argv[7])
 
 payload = {
     "port": port,
@@ -209,9 +217,28 @@ payload = {
     "chrome_path": chrome_path,
     "pid": pid,
 }
-session_file.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def atomic_write(path: pathlib.Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+    )
+    try:
+        with os.fdopen(descriptor, "w") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
+atomic_write(session_file, json.dumps(payload, indent=2) + "\n")
+atomic_write(port_file, f"{port}\n")
 PY
-  printf '%s\n' "${port}" > "${PORT_FILE}"
 }
 
 emit_result() {
@@ -301,6 +328,39 @@ wait_for_cdp() {
   return 1
 }
 
+reuse_managed_endpoint() {
+  local port="$1"
+  local chrome_path="$2"
+  local wait_for_ready="${3:-false}"
+  local managed_pid=""
+  local probe_payload=""
+
+  managed_pid="$(find_managed_pid "${port}" 2>/dev/null || true)"
+  if [[ -z "${managed_pid}" ]]; then
+    return 1
+  fi
+
+  if [[ "${wait_for_ready}" == "true" ]]; then
+    probe_payload="$(wait_for_cdp "${port}" || true)"
+  else
+    probe_payload="$(probe_cdp "${port}" || true)"
+  fi
+  if [[ -z "${probe_payload}" ]]; then
+    return 1
+  fi
+
+  local ws_url
+  ws_url="$(python3 - "${probe_payload}" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["ws_url"])
+PY
+)"
+
+  write_state "${port}" "${ws_url}" "${chrome_path}" "${managed_pid}"
+  emit_result "${port}" "${ws_url}" "${chrome_path}" "${managed_pid}" true
+}
+
 main() {
   local chrome_path
   chrome_path="$(find_chrome_binary)" || {
@@ -311,35 +371,32 @@ main() {
   acquire_lock
 
   local existing_port=""
-  local probe_payload=""
   if existing_port="$(read_port_from_state 2>/dev/null || true)"; then
     if [[ -n "${existing_port}" ]]; then
-      probe_payload="$(probe_cdp "${existing_port}" || true)"
-      local managed_pid=""
-      managed_pid="$(find_managed_pid "${existing_port}" 2>/dev/null || true)"
-      if [[ -n "${probe_payload}" && -n "${managed_pid}" ]]; then
-        local ws_url
-        ws_url="$(python3 - "${probe_payload}" <<'PY'
-import json
-import sys
-print(json.loads(sys.argv[1])["ws_url"])
-PY
-)"
-        write_state "${existing_port}" "${ws_url}" "${chrome_path}" "${managed_pid}"
-        emit_result "${existing_port}" "${ws_url}" "${chrome_path}" "${managed_pid}" true
+      if reuse_managed_endpoint "${existing_port}" "${chrome_path}" false; then
         return 0
       fi
     fi
   fi
 
-  cleanup_stale_state
+  # State files are caches. If they are missing, corrupt, or stale, rediscover
+  # the fixed endpoint from the live Chrome process before considering launch.
+  if reuse_managed_endpoint "${PREFERRED_PORT}" "${chrome_path}" true; then
+    return 0
+  fi
 
   local existing_pids
   existing_pids="$(profile_in_use 2>/dev/null || true)"
   if [[ -n "${existing_pids}" ]]; then
-    echo "profile ${PROFILE_DIR} is already in use by Chrome (pid: $(echo "${existing_pids}" | tr '\n' ' '))" >&2
-    echo "but no reachable CDP endpoint was found in ${SESSION_FILE}." >&2
-    echo "close that Chrome instance, or delete ${SESSION_FILE} after confirming the running Chrome exposes CDP." >&2
+    local expected_pid=""
+    expected_pid="$(find_managed_pid "${PREFERRED_PORT}" 2>/dev/null || true)"
+    if [[ -n "${expected_pid}" ]]; then
+      echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s." >&2
+      echo "keep the profile open and inspect http://127.0.0.1:${PREFERRED_PORT}/json/version plus ${LAUNCH_LOG}." >&2
+    else
+      echo "profile ${PROFILE_DIR} is already in use by Chrome (pid: $(echo "${existing_pids}" | tr '\n' ' ')), but that process does not match --remote-debugging-port=${PREFERRED_PORT}." >&2
+      echo "close or relaunch that Chrome with the managed arguments before retrying; the state files were left intact for diagnosis." >&2
+    fi
     exit 1
   fi
 
@@ -355,9 +412,12 @@ PY
     exit 1
   fi
 
+  cleanup_stale_state
+
   local pid
   pid="$(launch_chrome "${port}" "${chrome_path}")"
 
+  local probe_payload
   probe_payload="$(wait_for_cdp "${port}")" || {
     if ! pid_is_running "${pid}"; then
       cleanup_profile_singletons >/dev/null 2>&1 || true
@@ -384,4 +444,6 @@ PY
   emit_result "${port}" "${ws_url}" "${chrome_path}" "${pid}" false
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
