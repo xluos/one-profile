@@ -54,6 +54,18 @@ Do not assume the MCP binding exists just because Chrome is reachable. Before us
 
 The skill must guarantee that 9222 is either serving the managed Chrome or is free so it can bind to it. If an unrelated process holds 9222, fail instead of choosing another port; another port would break the configured MCP clients.
 
+## Script path convention
+
+All `scripts/...` paths in this document are relative to the root directory of this skill, namely the directory that contains this `SKILL.md`. They are not relative to the caller's current working directory or to the repository root. When invoking a script from another directory, resolve the installed skill root first and use its absolute path, for example:
+
+```bash
+SKILL_DIR="/path/to/chrome-cdp-manager"
+"${SKILL_DIR}/scripts/verify_mcp_cdp_config.py" --client codex
+"${SKILL_DIR}/scripts/ensure_chrome_cdp.sh"
+```
+
+The repository `README.md` may use `skills/chrome-cdp-manager/...` paths because those examples are relative to the repository root; that convention does not change the skill's runtime path contract.
+
 ## Workflow
 
 1. Probe the Chrome extension path as described above. If it is healthy, use it and stop this workflow.
