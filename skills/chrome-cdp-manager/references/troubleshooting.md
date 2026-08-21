@@ -59,6 +59,7 @@ Action:
 
 - Check whether a Chrome main process still has both the managed profile and `--remote-debugging-port=9222` arguments.
 - If it does, wait for the endpoint and let `ensure_chrome_cdp.sh` normalize `session.json` with the current `ws_url` and `pid`.
+- If that managed process stays alive but the endpoint never becomes reachable, treat it as a stale managed instance: stop the browser processes for the managed profile, clear stale singleton locks, and relaunch on 9222.
 - If no matching process exists and the profile is unused, start a fresh Chrome instance and rewrite state.
 - If another Chrome owns the profile without the debugging argument, leave state intact for diagnosis and relaunch that browser deliberately.
 

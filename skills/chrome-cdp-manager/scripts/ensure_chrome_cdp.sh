@@ -13,6 +13,10 @@ SESSION_FILE="${STATE_DIR}/session.json"
 LOCK_DIR="${STATE_DIR}/.launch.lock"
 PREFERRED_PORT="${CHROME_CDP_PREFERRED_PORT:-9222}"
 STARTUP_TIMEOUT_SECONDS="${CHROME_CDP_STARTUP_TIMEOUT_SECONDS:-15}"
+STABILITY_PROBE_COUNT="${CHROME_CDP_STABILITY_PROBE_COUNT:-3}"
+STABILITY_PROBE_INTERVAL_SECONDS="${CHROME_CDP_STABILITY_PROBE_INTERVAL_SECONDS:-0.5}"
+FRESH_LAUNCH_ATTEMPTS="${CHROME_CDP_FRESH_LAUNCH_ATTEMPTS:-2}"
+RECYCLE_UNREACHABLE_MANAGED="${CHROME_CDP_RECYCLE_UNREACHABLE_MANAGED:-true}"
 LAUNCH_LOG="${STATE_DIR}/chrome-launch.log"
 
 mkdir -p "${STATE_DIR}" "${PROFILE_DIR}"
@@ -48,6 +52,7 @@ pid_is_running() {
 find_managed_pid() {
   local port="$1"
   python3 - "${PROFILE_DIR}" "${port}" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -62,6 +67,27 @@ try:
 except Exception:
     sys.exit(1)
 
+def is_browser_process(pid: str, command: str) -> bool:
+    candidates = []
+    for proc_path in (f"/proc/{pid}/comm",):
+        try:
+            candidates.append(open(proc_path, encoding="utf-8").read().strip().lower())
+        except Exception:
+            pass
+    try:
+        candidates.append(os.path.basename(os.readlink(f"/proc/{pid}/exe")).lower())
+    except Exception:
+        pass
+    first_token = command.split(None, 1)[0].strip("\"'").lower() if command else ""
+    if first_token:
+        candidates.append(os.path.basename(first_token))
+    command_lower = command.lower()
+    return (
+        any("chrome" in candidate or "chromium" in candidate for candidate in candidates)
+        or "google chrome" in command_lower
+        or "chrome.app/" in command_lower
+    )
+
 profile_arg = f"--user-data-dir={profile_dir}"
 port_arg = f"--remote-debugging-port={port}"
 for line in output.splitlines():
@@ -72,6 +98,8 @@ for line in output.splitlines():
     if len(parts) != 2:
         continue
     pid, command = parts
+    if not is_browser_process(pid, command):
+        continue
     if profile_arg in command and port_arg in command:
         print(pid)
         sys.exit(0)
@@ -82,6 +110,7 @@ PY
 
 profile_in_use() {
   python3 - "${PROFILE_DIR}" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -95,6 +124,27 @@ try:
 except Exception:
     sys.exit(1)
 
+def is_browser_process(pid: str, command: str) -> bool:
+    candidates = []
+    for proc_path in (f"/proc/{pid}/comm",):
+        try:
+            candidates.append(open(proc_path, encoding="utf-8").read().strip().lower())
+        except Exception:
+            pass
+    try:
+        candidates.append(os.path.basename(os.readlink(f"/proc/{pid}/exe")).lower())
+    except Exception:
+        pass
+    first_token = command.split(None, 1)[0].strip("\"'").lower() if command else ""
+    if first_token:
+        candidates.append(os.path.basename(first_token))
+    command_lower = command.lower()
+    return (
+        any("chrome" in candidate or "chromium" in candidate for candidate in candidates)
+        or "google chrome" in command_lower
+        or "chrome.app/" in command_lower
+    )
+
 matches = []
 for line in output.splitlines():
     line = line.strip()
@@ -104,7 +154,7 @@ for line in output.splitlines():
     if len(parts) != 2:
         continue
     pid, command = parts
-    if "Chrome" not in command:
+    if not is_browser_process(pid, command):
         continue
     matches.append(pid)
 
@@ -125,6 +175,35 @@ cleanup_profile_singletons() {
     "${PROFILE_DIR}/SingletonLock" \
     "${PROFILE_DIR}/SingletonCookie" \
     "${PROFILE_DIR}/SingletonSocket"
+}
+
+terminate_profile_processes() {
+  local pids=""
+  pids="$(profile_in_use 2>/dev/null || true)"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill "${pid}" >/dev/null 2>&1 || true
+  done <<< "${pids}"
+
+  sleep 1
+
+  pids="$(profile_in_use 2>/dev/null || true)"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill -9 "${pid}" >/dev/null 2>&1 || true
+  done <<< "${pids}"
+
+  sleep 0.5
+  profile_in_use >/dev/null 2>&1 && return 1
+  return 0
 }
 
 read_port_from_state() {
@@ -272,16 +351,19 @@ PY
 launch_chrome() {
   local port="$1"
   local chrome_path="$2"
+  local launch_args=(
+    --remote-debugging-port="${port}"
+    --user-data-dir="${PROFILE_DIR}"
+    --no-first-run
+    --no-default-browser-check
+  )
 
   : > "${LAUNCH_LOG}"
 
   if [[ "$(uname)" == "Darwin" && "${chrome_path}" == *"/Contents/MacOS/"* ]]; then
     local app_path="${chrome_path%/Contents/MacOS/*}"
     open -n -a "${app_path}" --args \
-      --remote-debugging-port="${port}" \
-      --user-data-dir="${PROFILE_DIR}" \
-      --no-first-run \
-      --no-default-browser-check \
+      "${launch_args[@]}" \
       >>"${LAUNCH_LOG}" 2>&1
 
     local waited=0
@@ -300,12 +382,15 @@ launch_chrome() {
     return 0
   fi
 
-  nohup "${chrome_path}" \
-    --remote-debugging-port="${port}" \
-    --user-data-dir="${PROFILE_DIR}" \
-    --no-first-run \
-    --no-default-browser-check \
-    </dev/null >>"${LAUNCH_LOG}" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${chrome_path}" \
+      "${launch_args[@]}" \
+      </dev/null >>"${LAUNCH_LOG}" 2>&1 &
+  else
+    nohup "${chrome_path}" \
+      "${launch_args[@]}" \
+      </dev/null >>"${LAUNCH_LOG}" 2>&1 &
+  fi
 
   disown "$!" 2>/dev/null || true
   echo $!
@@ -315,14 +400,68 @@ wait_for_cdp() {
   local port="$1"
   local deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
   local payload
+  local stable_payload
 
   while (( SECONDS < deadline )); do
     payload="$(probe_cdp "${port}" || true)"
     if [[ -n "${payload}" ]]; then
-      printf '%s\n' "${payload}"
-      return 0
+      stable_payload="${payload}"
+      local stable=1
+      local probe_index=1
+      while (( probe_index < STABILITY_PROBE_COUNT )); do
+        sleep "${STABILITY_PROBE_INTERVAL_SECONDS}"
+        stable_payload="$(probe_cdp "${port}" || true)"
+        if [[ -z "${stable_payload}" ]]; then
+          stable=0
+          break
+        fi
+        probe_index=$((probe_index + 1))
+      done
+
+      if (( stable == 1 )); then
+        printf '%s\n' "${stable_payload}"
+        return 0
+      fi
     fi
     sleep 0.5
+  done
+
+  return 1
+}
+
+launch_and_wait_for_cdp() {
+  local port="$1"
+  local chrome_path="$2"
+  local attempt=1
+  local pid=""
+  local probe_payload=""
+  local managed_pid=""
+
+  while (( attempt <= FRESH_LAUNCH_ATTEMPTS )); do
+    pid="$(launch_chrome "${port}" "${chrome_path}")"
+    probe_payload="$(wait_for_cdp "${port}" || true)"
+    if [[ -n "${probe_payload}" ]]; then
+      managed_pid="$(find_managed_pid "${port}" 2>/dev/null || true)"
+      if [[ -n "${managed_pid}" ]]; then
+        printf '%s\n%s\n' "${managed_pid}" "${probe_payload}"
+        return 0
+      fi
+      if pid_is_running "${pid}"; then
+        printf '%s\n%s\n' "${pid}" "${probe_payload}"
+        return 0
+      fi
+    fi
+
+    if (( attempt >= FRESH_LAUNCH_ATTEMPTS )); then
+      break
+    fi
+
+    if ! profile_in_use >/dev/null 2>&1; then
+      cleanup_profile_singletons >/dev/null 2>&1 || true
+    fi
+    cleanup_stale_state
+    sleep "${STABILITY_PROBE_INTERVAL_SECONDS}"
+    attempt=$((attempt + 1))
   done
 
   return 1
@@ -391,13 +530,24 @@ main() {
     local expected_pid=""
     expected_pid="$(find_managed_pid "${PREFERRED_PORT}" 2>/dev/null || true)"
     if [[ -n "${expected_pid}" ]]; then
-      echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s." >&2
-      echo "keep the profile open and inspect http://127.0.0.1:${PREFERRED_PORT}/json/version plus ${LAUNCH_LOG}." >&2
+      if [[ "${RECYCLE_UNREACHABLE_MANAGED}" == "true" ]]; then
+        echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s; attempting a controlled restart." >&2
+        if ! terminate_profile_processes; then
+          echo "failed to stop the unreachable managed Chrome processes for ${PROFILE_DIR}." >&2
+          echo "inspect http://127.0.0.1:${PREFERRED_PORT}/json/version plus ${LAUNCH_LOG}." >&2
+          exit 1
+        fi
+        cleanup_profile_singletons >/dev/null 2>&1 || true
+      else
+        echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s." >&2
+        echo "keep the profile open and inspect http://127.0.0.1:${PREFERRED_PORT}/json/version plus ${LAUNCH_LOG}." >&2
+        exit 1
+      fi
     else
       echo "profile ${PROFILE_DIR} is already in use by Chrome (pid: $(echo "${existing_pids}" | tr '\n' ' ')), but that process does not match --remote-debugging-port=${PREFERRED_PORT}." >&2
       echo "close or relaunch that Chrome with the managed arguments before retrying; the state files were left intact for diagnosis." >&2
+      exit 1
     fi
-    exit 1
   fi
 
   cleanup_profile_singletons >/dev/null 2>&1 || true
@@ -414,21 +564,22 @@ main() {
 
   cleanup_stale_state
 
-  local pid
-  pid="$(launch_chrome "${port}" "${chrome_path}")"
-
+  local launch_result
   local probe_payload
-  probe_payload="$(wait_for_cdp "${port}")" || {
-    if ! pid_is_running "${pid}"; then
+  local pid
+  launch_result="$(launch_and_wait_for_cdp "${port}" "${chrome_path}")" || {
+    if ! profile_in_use >/dev/null 2>&1; then
       cleanup_profile_singletons >/dev/null 2>&1 || true
     fi
     echo "chrome cdp did not become ready on port ${port}" >&2
     echo "launch log: ${LAUNCH_LOG}" >&2
     exit 1
   }
+  pid="$(printf '%s\n' "${launch_result}" | sed -n '1p')"
+  probe_payload="$(printf '%s\n' "${launch_result}" | sed -n '2p')"
 
   if ! pid_is_running "${pid}"; then
-    pid="$(pgrep -f -- "--user-data-dir=${PROFILE_DIR}" | head -n 1 || true)"
+    pid="$(find_managed_pid "${port}" 2>/dev/null || true)"
     pid="${pid:-0}"
   fi
 
