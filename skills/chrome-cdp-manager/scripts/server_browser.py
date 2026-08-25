@@ -164,16 +164,42 @@ def os_release() -> dict[str, str]:
     return values
 
 
+def debian_base_major() -> int | None:
+    result = run(["dpkg-query", "-W", "-f=${Version}", "base-files"], check=False)
+    match = re.match(r"(\d+)", result.stdout.strip())
+    return int(match.group(1)) if match else None
+
+
+def apt_suite_present(suite: str) -> bool:
+    source_files = [pathlib.Path("/etc/apt/sources.list")]
+    source_files.extend(pathlib.Path("/etc/apt/sources.list.d").glob("*"))
+    deb_line = re.compile(rf"^\s*deb(?:\s+\[[^]]+\])?\s+\S+\s+{re.escape(suite)}(?:\s|$)")
+    deb822_suite = re.compile(rf"^\s*Suites:\s+.*\b{re.escape(suite)}\b", re.MULTILINE)
+    for path in source_files:
+        try:
+            content = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if any(deb_line.search(line) for line in content.splitlines()) or deb822_suite.search(content):
+            return True
+    return False
+
+
+def debian_bookworm_compatible() -> bool:
+    debian_version_path = pathlib.Path("/etc/debian_version")
+    if debian_version_path.exists() and debian_version_path.read_text().strip().startswith("12"):
+        return True
+    return debian_base_major() == 12 and apt_suite_present("bookworm")
+
+
 def xpra_repo_codename() -> str:
     release = os_release()
     distro_id = release.get("ID")
     codename = release.get("VERSION_CODENAME")
     if distro_id == "debian" and codename == "bookworm":
         return "bookworm"
-    if distro_id == "velinux" and release.get("VERSION_ID") == "2":
-        debian_version = pathlib.Path("/etc/debian_version").read_text().strip()
-        if debian_version.startswith("12"):
-            return "bookworm"
+    if distro_id == "velinux" and release.get("VERSION_ID") == "2" and debian_bookworm_compatible():
+        return "bookworm"
     raise RuntimeError(
         "automatic Xpra stable-repository setup supports Debian 12/Bookworm "
         "and verified veLinux 2 hosts backed by Debian 12 only"
