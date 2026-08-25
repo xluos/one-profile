@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import json
 import pathlib
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -50,6 +52,36 @@ class XpraPlatformTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "xpra-html5"):
                 server_browser.apt_install(["xpra-server", "xpra-html5"])
+
+    def test_bundled_bridge_asset_is_valid_and_extractable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = pathlib.Path(directory)
+            bridge_dir = state_dir / f"playwright-mcp-bridge-{server_browser.BRIDGE_VERSION}"
+            with mock.patch.object(server_browser, "STATE_DIR", state_dir), mock.patch.object(
+                server_browser, "BRIDGE_DIR", bridge_dir
+            ):
+                extracted = server_browser.prepare_bridge_extension()
+                self.assertEqual(extracted, bridge_dir)
+                self.assertTrue(server_browser.bridge_directory_valid(extracted))
+
+    def test_absolute_unpacked_bridge_path_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            profile = root / "profile"
+            extension = root / "extension"
+            extension.mkdir()
+            preferences = profile / "Default" / "Preferences"
+            preferences.parent.mkdir(parents=True)
+            preferences.write_text(json.dumps({
+                "extensions": {"settings": {server_browser.BRIDGE_ID: {
+                    "path": str(extension),
+                    "manifest": {"name": "Playwright Extension", "version": server_browser.BRIDGE_VERSION},
+                    "disable_reasons": [],
+                }}}
+            }))
+            with mock.patch.object(server_browser, "PROFILE_DIR", profile):
+                state = server_browser.bridge_profile_state()
+        self.assertEqual(state["path"], str(extension))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
 from typing import Any
 
 from mcp_stdio_client import call_mcp
@@ -29,7 +31,11 @@ XPRA_PORT = int(os.environ.get("CHROME_CDP_XPRA_PORT", "14500"))
 XPRA_BACKEND_PORT = int(os.environ.get("CHROME_CDP_XPRA_BACKEND_PORT", str(XPRA_PORT + 1)))
 LOCAL_BIN = pathlib.Path("~/.local/bin").expanduser()
 BRIDGE_ID = "mmlmfjhmonkocbjadbfplnigmagldckm"
-BRIDGE_UPDATE_URL = "https://clients2.google.com/service/update2/crx"
+BRIDGE_VERSION = "0.3.0"
+BRIDGE_CRX_SHA256 = "ee82572c3da263f567e0f5167cb5dad2376fcf0f248c8c154d3cc7e7ba68240b"
+BRIDGE_CRX = SCRIPT_DIR.parent / "assets" / f"playwright-mcp-bridge-{BRIDGE_VERSION}.crx"
+BRIDGE_DIR = STATE_DIR / f"playwright-mcp-bridge-{BRIDGE_VERSION}"
+BRIDGE_POLICY = pathlib.Path("/etc/opt/chrome/policies/managed/playwright-mcp-bridge.json")
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 XPRA_KEY_FINGERPRINT = "B4993B57323148E37977E5D873254CAD17978FAF"
 XPRA_BOOKWORM_SOURCE = """Types: deb
@@ -64,7 +70,52 @@ def command_env() -> dict[str, str]:
     chrome_path = system_chrome_path()
     if chrome_path:
         env["CHROME_BIN"] = chrome_path
+    if bridge_directory_valid(BRIDGE_DIR):
+        env["CHROME_CDP_LOAD_EXTENSION"] = str(BRIDGE_DIR)
     return env
+
+
+def bridge_directory_valid(path: pathlib.Path) -> bool:
+    manifest_path = path / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        manifest.get("name") == "Playwright Extension"
+        and manifest.get("version") == BRIDGE_VERSION
+        and isinstance(manifest.get("key"), str)
+        and bool(manifest["key"])
+    )
+
+
+def prepare_bridge_extension() -> pathlib.Path:
+    if bridge_directory_valid(BRIDGE_DIR):
+        return BRIDGE_DIR
+    if not BRIDGE_CRX.is_file():
+        raise RuntimeError(f"bundled Playwright MCP Bridge asset is missing: {BRIDGE_CRX}")
+    digest = hashlib.sha256(BRIDGE_CRX.read_bytes()).hexdigest()
+    if digest != BRIDGE_CRX_SHA256:
+        raise RuntimeError(f"bundled Playwright MCP Bridge checksum mismatch: {digest}")
+
+    temporary = pathlib.Path(tempfile.mkdtemp(prefix=".playwright-mcp-bridge-", dir=STATE_DIR))
+    try:
+        with zipfile.ZipFile(BRIDGE_CRX) as archive:
+            root = temporary.resolve()
+            for member in archive.infolist():
+                target = (temporary / member.filename).resolve()
+                if target != root and root not in target.parents:
+                    raise RuntimeError(f"unsafe path in bundled Playwright MCP Bridge: {member.filename}")
+            archive.extractall(temporary)
+        if not bridge_directory_valid(temporary):
+            raise RuntimeError("bundled Playwright MCP Bridge manifest validation failed")
+        if BRIDGE_DIR.exists():
+            shutil.rmtree(BRIDGE_DIR)
+        temporary.replace(BRIDGE_DIR)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return BRIDGE_DIR
 
 
 def executable(name: str) -> str | None:
@@ -150,7 +201,10 @@ def detect() -> dict[str, Any]:
         "chinese_font": chinese_font_state(),
         "bridge": {
             "extension_id": BRIDGE_ID,
-            "policy_installed": pathlib.Path("/etc/opt/chrome/policies/managed/playwright-mcp-bridge.json").exists(),
+            "bundled_version": BRIDGE_VERSION,
+            "bundled_asset_valid": BRIDGE_CRX.is_file() and hashlib.sha256(BRIDGE_CRX.read_bytes()).hexdigest() == BRIDGE_CRX_SHA256,
+            "unpacked_extension_ready": bridge_directory_valid(BRIDGE_DIR),
+            "policy_file": str(BRIDGE_POLICY),
             "token_file": str(STATE_DIR / "playwright-mcp-extension-token"),
             "token_present": (STATE_DIR / "playwright-mcp-extension-token").exists(),
             "token_mode": file_mode(STATE_DIR / "playwright-mcp-extension-token"),
@@ -543,12 +597,14 @@ def bridge_profile_state() -> dict[str, Any] | None:
     if not isinstance(settings, dict):
         return None
     manifest = settings.get("manifest", {})
-    relative_path = settings.get("path")
-    extension_path = PROFILE_DIR / "Default" / "Extensions" / str(relative_path or "")
+    configured_path = settings.get("path")
+    extension_path = pathlib.Path(str(configured_path or ""))
+    if not extension_path.is_absolute():
+        extension_path = PROFILE_DIR / "Default" / "Extensions" / extension_path
     if (
         manifest.get("name") != "Playwright Extension"
         or settings.get("disable_reasons")
-        or not relative_path
+        or not configured_path
         or not extension_path.exists()
     ):
         return None
@@ -561,17 +617,13 @@ def bridge_profile_state() -> dict[str, Any] | None:
 
 def install_bridge() -> dict[str, Any]:
     ensure_permissions()
-    policy = {
-        "ExtensionSettings": {
-            BRIDGE_ID: {
-                "installation_mode": "force_installed",
-                "update_url": BRIDGE_UPDATE_URL,
-            }
-        }
-    }
+    extension_directory = prepare_bridge_extension()
+    # A previous run may have configured Web Store force-installation. Clear
+    # only this workflow-owned policy so offline hosts do not keep retrying it.
+    policy = {}
     policy_source = STATE_DIR / "playwright-mcp-bridge-policy.json"
     policy_source.write_text(json.dumps(policy, indent=2) + "\n")
-    run(["sudo", "install", "-D", "-m", "0644", str(policy_source), "/etc/opt/chrome/policies/managed/playwright-mcp-bridge.json"])
+    run(["sudo", "install", "-D", "-m", "0644", str(policy_source), str(BRIDGE_POLICY)])
     stop_managed_chrome()
     chrome = ensure_chrome()
     extension_state = None
@@ -581,11 +633,13 @@ def install_bridge() -> dict[str, Any]:
             break
         time.sleep(1)
     if not extension_state:
-        raise RuntimeError("Playwright MCP Bridge policy is present, but Chrome did not install the extension")
+        raise RuntimeError("Chrome did not load the bundled Playwright MCP Bridge extension")
     capture_bridge_token()
     return {
         "installed": True,
         "extension_id": BRIDGE_ID,
+        "source": "bundled-official-crx",
+        "bundled_path": str(extension_directory),
         "extension": extension_state,
         "token_file": str(STATE_DIR / "playwright-mcp-extension-token"),
         "chrome": chrome,

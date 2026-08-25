@@ -85,7 +85,7 @@ Do not export cookies as the default login-transfer mechanism. A persistent prof
 
 ## Playwright MCP Bridge and token
 
-The server branch installs the official Web Store extension `mmlmfjhmonkocbjadbfplnigmagldckm` through Chrome enterprise policy, restarts only the managed Chrome, and verifies that the extension appears in the live browser. It then:
+The server branch carries a checksum-pinned official Bridge CRX for extension `mmlmfjhmonkocbjadbfplnigmagldckm`. It verifies the asset and manifest, safely extracts it under the managed state directory, loads that stable absolute directory with `--load-extension`, restarts only the managed Chrome, and verifies that the extension appears in the live browser. This makes initialization independent of Google Web Store reachability while preserving the extension ID from the signed manifest key. It then:
 
 1. opens the Bridge Status page so the official extension generates its 32-byte URL-safe token;
 2. captures that value inside the virtual display and stores it in `~/.agents-profile/main/playwright-mcp-extension-token` with mode `0600`;
@@ -102,7 +102,7 @@ Choose the installation method from the extension source:
 
 - **Chrome Web Store:** use the remote Xpra UI for ordinary one-off installation. The dedicated profile preserves it across restarts.
 - **Unpacked extension under development:** build it to a stable absolute directory and load that directory through Chrome's supported unpacked-extension flow. For reproducible service bootstrap, include `--load-extension=/absolute/path` in the supervisor-owned Chrome launch arguments. Reload after every rebuilt artifact before claiming runtime verification.
-- **Fleet-managed Web Store extension:** use Chrome enterprise policy only with authorization. The built-in exception is the official Playwright Bridge when `bridge --apply` or full initialization was explicitly requested.
+- **Fleet-managed Web Store extension:** use Chrome enterprise policy only with authorization. The official Playwright Bridge is handled separately by the checksum-pinned bundled asset when `bridge --apply` or full initialization was explicitly requested.
 - **Chrome DevTools MCP extension tools:** use them only if the currently installed MCP exposes the needed tool and supports it for the active connection mode. Do not assume an extension operation available for a pipe-launched browser also works through `--browserUrl` attachment; inspect the current official capability or perform a harmless list/probe first.
 
 Do not download and silently install arbitrary CRX files. Verify the source, requested permissions, build output, and target profile before installation. Installing, force-installing, or removing an extension changes browser state and requires the user's authorization.
