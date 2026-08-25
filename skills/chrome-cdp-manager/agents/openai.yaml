@@ -1,4 +1,4 @@
 interface:
   display_name: "Chrome Control Router"
-  short_description: "Prefer Chrome extension; recover managed CDP fallback"
-  default_prompt: "Use $chrome-cdp-manager to control Chrome through the connected extension, recovering or starting the managed CDP profile only when the fallback is needed."
+  short_description: "Route persistent Chrome with managed server Xpra"
+  default_prompt: "Use $chrome-cdp-manager to reuse persistent Chrome, automatically offering an authenticated Xpra link when server UI help is needed."

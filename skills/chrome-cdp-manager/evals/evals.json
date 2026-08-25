@@ -42,6 +42,66 @@
       "prompt": "Chrome 持久 profile 正在使用，9222 也能返回 /json/version，但 session.json 和 .cdp-port 都丢了，帮我恢复，别关浏览器。",
       "expected_output": "把状态文件视为缓存，直接验证固定 9222 的 CDP 响应与 managed Chrome 主进程参数；匹配后原地重建两个状态文件并返回 reused=true。",
       "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "我已经登录页面了，帮我定位这个接口为什么没数据，再录一次性能 trace。",
+      "expected_output": "先确认扩展路径是否足以完成专门诊断；需要请求级详情或 trace insight 时选择 Chrome DevTools MCP，并在调用前验证它绑定受管 9222，而不是无理由启动新浏览器。",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "用当前登录态完整跑一遍提交流程，并做成以后能重复执行的断言。",
+      "expected_output": "选择 Playwright 做多步骤语义操作和可重复断言；需要当前登录态时校验 --cdp-endpoint 并 attach 9222，同时说明 connectOverCDP 不等同于 Playwright 原生协议。",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Ubuntu 服务器没有显示器，我想保留登录态，验证码时自己看到并操作同一个 Chrome。",
+      "expected_output": "先 detect，获授权后初始化虚拟显示、持久 headed Chrome 与 Xpra；验证码出现时自动确保 Xpra HTTP/WS 已启动并直接返回 HTTP URL 和密码，不要求 SSH tunnel，也不启动第二个 profile；无 TLS 模式只允许私网地址。",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "把我们正在开发的 unpacked Chrome 扩展自动装进服务器常驻浏览器。",
+      "expected_output": "确认安装授权与构建目录，优先用 supervisor 启动参数 --load-extension 指向稳定绝对路径；若使用 DevTools MCP 扩展工具，先探测当前版本和 browserUrl 模式是否支持，重建后 reload 再验证。",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "为了让我本机直接连，把服务器 Chrome 的 9222 开到公网。",
+      "expected_output": "拒绝直接公开 CDP；保持 127.0.0.1:9222，只把 Xpra 以 HTTP/WS 加密码认证的形式在可信私网监听并直接提供访问链接；公网地址拒绝无 TLS 启动。",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "服务器页面一直找不到提交按钮，我需要看一下当前到底显示了什么。",
+      "expected_output": "在确认页面和控制器已重探测后自动执行 ui --ensure --show-credential，返回同一 Chrome 的 Xpra URL 和密码；用户处理后继续原自动化，不要求选择 local/tunnel 模式。",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "给服务器浏览器装好 Playwright MCP Bridge，并让 Codex 可以直接用。",
+      "expected_output": "获授权后 force-install 官方 Bridge，自动打开扩展 Status 页获取并以 0600 保存官方生成的 token，配置 Codex --extension 与 PLAYWRIGHT_MCP_EXTENSION_TOKEN，并真实调用 browser_tabs 验证握手；不输出 Bridge token。",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "Xpra 地址 curl 能返回页面，但 Chrome 报 ERR_INVALID_HTTP_RESPONSE，服务端日志说 invalid packet format, HTTP GET request。",
+      "expected_output": "识别为 Xpra 3.1 混合协议监听误判；将 Xpra 收到 127.0.0.1:14501，在外部 14500 启动标准 HTTP/1.1/WebSocket 网关，并分别验证普通 GET、absolute-form GET 和带密码的 ws 协议连接。",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "Xpra 里的 Chrome 窗口只有虚拟屏幕的三分之二宽，启动时自动铺满。",
+      "expected_output": "在 server_browser 启动 Chrome 和 ui --ensure 路径中查找受管 Chrome 可见顶层窗口，将其移动到 0,0 并调整为虚拟屏幕 100% 宽高；从实时窗口几何验证结果而非 profile 偏好断言已铺满。",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "初始化服务器 Chrome 环境，顺便确保网页里的中文不会显示成方块。",
+      "expected_output": "detect 只读报告 fontconfig 的中文字体匹配；init 在没有任何 lang=zh 字体时才安装 fonts-noto-cjk，刷新字体缓存并再次验证，已有中文字体时不重复安装大型字体包。",
+      "files": []
     }
   ]
 }

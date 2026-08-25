@@ -2,6 +2,19 @@
 
 ## Common failures
 
+### Xpra returns `ERR_INVALID_HTTP_RESPONSE` while curl succeeds
+
+Symptom: the Xpra HTML URL works with a simple local curl, but a user's browser reports `ERR_INVALID_HTTP_RESPONSE`. The Xpra log records `invalid packet format, HTTP GET request` for that browser or its network proxy.
+
+Cause: Xpra 3.1's mixed HTTP/native-protocol listener can misclassify some valid browser or proxy request forms even though simpler origin-form requests work.
+
+Action:
+
+- Do not expose Xpra's mixed-protocol socket directly.
+- Keep Xpra on the managed loopback backend `127.0.0.1:14501`.
+- Run `xpra_http_gateway.mjs` on external `14500`; it emits standard HTTP/1.1, normalizes absolute-form targets, and forwards WebSocket upgrades only to the loopback Xpra backend.
+- Verify an ordinary GET, an absolute-form GET, and an authenticated `ws://` Xpra info request before returning the URL.
+
 ### Port is occupied but not Chrome
 
 Symptom: `http://127.0.0.1:<port>/json/version` fails or returns non-JSON.
@@ -37,6 +50,17 @@ Action:
 - Configure `@playwright/mcp` with `--cdp-endpoint http://127.0.0.1:9222`.
 - Restart the MCP host so existing server processes reload their arguments.
 - Stop the pipe-launched Chrome only after confirming it has no work that must be preserved.
+
+### MCP endpoint validation passes but the server exits immediately
+
+Symptom: `verify_mcp_cdp_config.py` reports the fixed endpoint correctly, but the MCP process fails before serving tools. A common server case is that an interactive shell uses a user-local Node.js while the MCP host inherits an older system `PATH`.
+
+Action:
+
+- Run the configured MCP command with the exact environment inherited by the host and inspect its version/startup output.
+- Compare the active Node.js version with the MCP package's declared engine requirement.
+- If Node.js lives under a user-local prefix, add that prefix to the MCP server's configured `PATH`; do not rely on interactive shell initialization.
+- Restart the MCP host and complete a harmless protocol call such as listing pages or tabs. Endpoint validation alone does not prove executable health.
 
 ### Chrome exits immediately
 

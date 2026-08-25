@@ -1,6 +1,6 @@
 ---
 name: chrome-cdp-manager
-description: Prefer a healthy Codex/ChatGPT Chrome extension connection; otherwise recover, reuse, or start a managed Chrome with a persistent profile on CDP port 9222. Use when browser automation needs an existing Chrome tab, login state, a persistent profile, stale-state recovery, or a fallback connection through chrome-devtools or Playwright.
+description: Route persistent Chrome work through a healthy Codex/ChatGPT extension or a managed CDP endpoint, choosing Chrome DevTools MCP for deep diagnosis and Playwright for repeatable flows. Use for existing tabs or login state, stale CDP recovery, remote server Chrome, or human-assisted login through a persistent profile.
 ---
 
 # Chrome CDP Manager
@@ -16,25 +16,53 @@ Use this skill when the user asks for any of the following:
 - Attach to Chrome through CDP or remote debugging
 - Use a persistent Chrome profile for automation
 - Recover a stale Chrome CDP session and relaunch it safely
+- Operate a long-lived Chrome on a server and expose its GUI for login, MFA, or extension setup
 
 Before using `chrome-devtools`, `Playwright`, or similar browser automation tools, use this skill first when the task requires persistent Chrome state, login reuse, or CDP attachment.
 
 If the task only needs a fresh stateless browser session, do not trigger this skill.
 
+## Choose the control surface by outcome
+
+Keep access to the right browser state separate from the tool used to finish the task:
+
+- **Codex/ChatGPT Chrome extension:** default for the user's current Chrome, tabs, cookies, SSO, installed extensions, and ordinary page interaction. If its full CDP mode exposes enough console, network, DOM, or performance data for the task, remain on this path.
+- **Chrome DevTools MCP:** use when the requested result requires its dedicated debugging surface, such as request/response inspection, performance traces and insights, throttling, memory analysis, Lighthouse, or Chrome-extension debugging. Do not switch merely because the tool is installed.
+- **Playwright:** use for repeatable multi-step flows, semantic assertions, route/API mocks, generated regression coverage, or cross-browser behavior. For Chrome login reuse, attach it to the managed endpoint; for fidelity-sensitive or non-Chrome coverage, let Playwright own an isolated browser instead of pretending CDP attachment is equivalent.
+
+Do not let two controllers mutate the same tab concurrently. Finish or pause one controller, identify the target tab and expected state, then hand off. Observation in one tool does not prove that another tool is attached to the same browser.
+
 ## Control surface priority
 
-Prefer the Codex/ChatGPT Chrome extension control path when it is available:
+On a local machine with the user's Chrome, prefer the Codex/ChatGPT Chrome extension control path when it is available:
 
 1. Load and follow the Browser skill for Chrome extension control.
 2. Establish an extension browser binding and perform a read-only `openTabs()` probe. A successful binding plus a successful tab probe means the extension path is healthy; an installed extension process alone is not sufficient evidence.
-3. When healthy, use the extension browser for the task. Do not run the CDP manager or call standalone browser MCP servers.
-4. When the extension is unavailable or its communication probe fails, read the Chrome extension troubleshooting guidance once. If the connection still cannot be recovered, continue with the managed CDP fallback below.
+3. When healthy and it covers the requested capability, use the extension browser for the task. Do not run the CDP manager or call standalone browser MCP servers.
+4. When the task requires a standalone capability listed above, continue with the managed CDP path without declaring the healthy extension broken.
+5. When the extension is unavailable or its communication probe fails, read the Chrome extension troubleshooting guidance once. If the connection still cannot be recovered, continue with the managed CDP fallback below.
 
-Do not switch from a healthy extension path to CDP merely because CDP tools are visible. The CDP path exists as a fallback for extension unavailability and for tasks that explicitly require standalone CDP/MCP behavior.
+Do not switch from a healthy extension path to CDP merely because CDP tools are visible. The managed CDP path exists for extension unavailability and for tasks that require the standalone capabilities listed above.
+
+On a server without a usable Codex/ChatGPT extension connection, skip repeated extension recovery and use a long-lived headed Chrome on a virtual display. Read [references/server-browser.md](references/server-browser.md) before detecting or initializing that environment, installing the Playwright MCP Bridge, changing Codex MCP configuration, or exposing Xpra.
+
+## Server branch
+
+Use `scripts/server_browser.py` as the single entrypoint on Linux servers:
+
+1. Run `server_browser.py detect` first. It is read-only and reports dependencies, Chinese-font coverage, managed ports, Bridge state, and Codex MCP binding without revealing credentials.
+2. If dependencies are missing and the user has authorized initialization, run `server_browser.py init --apply`. Initialization installs `fonts-noto-cjk` only when fontconfig finds no Chinese-capable font, then verifies the resulting match. Add `--show-credential` when the current task may need human UI access.
+3. For an existing host, use `bridge --apply`, `configure-codex --apply`, and `bridge --verify` to repair and prove the Playwright Bridge path independently.
+4. If automation reaches a login, MFA, CAPTCHA, consent, certificate prompt, ambiguous visual state, or repeated element-location failure, automatically run `server_browser.py ui --ensure --show-credential`. Return its `url` and `password` directly to the user; do not ask them to construct an SSH tunnel or choose a local-access mode.
+5. The Xpra page shows the same persistent Chrome controlled through CDP/Bridge. After the user clears the blocker, re-probe the target page and continue the original task. Do not launch another browser or profile.
+
+The server entrypoint must resize every visible managed Chrome top-level window to the full virtual-display geometry after Chrome starts or whenever Xpra is ensured. Include the verified display and window dimensions in the JSON result; do not rely on Chrome's previously persisted window placement.
+
+Starting an external GUI changes the host, so do it only within an authorized server-browser workflow. The UI escalation itself should be automatic once that workflow is authorized; do not make the user debug Xpra commands.
 
 ## State model
 
-The managed state directory is fixed to `~/.agents-profile/main/`.
+The managed state directory defaults to `~/.agents-profile/main/`; `CHROME_CDP_STATE_DIR` may override it for a deliberate isolated deployment.
 
 - Profile directory: `~/.agents-profile/main/chrome-profile/`
 - Port file: `~/.agents-profile/main/.cdp-port`
@@ -45,7 +73,7 @@ Treat `session.json` and `.cdp-port` as rebuildable caches, not as the source of
 
 ## Port contract
 
-The CDP address is **fixed to `http://127.0.0.1:9222`**. Keep the responsibilities separate:
+The CDP address is **fixed to `http://127.0.0.1:9222`** and must remain loopback-only. Keep the responsibilities separate:
 
 - MCP configuration routes `chrome-devtools` and Playwright to the fixed address. For Codex, configure `~/.codex/config.toml` with `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222` and `@playwright/mcp --cdp-endpoint http://127.0.0.1:9222`.
 - This skill provisions, rediscovers, and reuses the managed Chrome and profile behind that address.
@@ -68,18 +96,20 @@ The repository `README.md` may use `skills/chrome-cdp-manager/...` paths because
 
 ## Workflow
 
-1. Probe the Chrome extension path as described above. If it is healthy, use it and stop this workflow.
-2. For CDP fallback, identify the current MCP host. Run `scripts/verify_mcp_cdp_config.py --client <host>` before the first MCP browser-tool call in that host or after its configuration changes.
-3. Run `scripts/ensure_chrome_cdp.sh` and parse its JSON output.
-4. The script first probes cached state. If the caches are unusable, it probes fixed port 9222 and verifies the live Chrome main process against the managed profile and port arguments.
-5. If `reused` is `true`, the existing managed Chrome was found and both cache files are normalized. Call the configured MCP tools directly.
-6. If `reused` is `false`, a fresh managed Chrome was started on 9222. Call the configured MCP tools after the endpoint becomes ready.
-7. If either fallback script exits non-zero, surface the error. Do not use an unbound MCP, `open -a`, a different port, or any path that bypasses the managed profile.
+1. Choose the control surface from the requested outcome. On a local machine, probe the Chrome extension path before selecting a standalone MCP. On a server known not to have the extension path, read the server reference and continue with managed CDP.
+2. If the extension is healthy and covers the requested capability, use it and stop this workflow.
+3. For a managed CDP controller, identify the current MCP host. Run `scripts/verify_mcp_cdp_config.py --client <host>` before the first MCP browser-tool call in that host or after its configuration changes.
+4. Run `scripts/ensure_chrome_cdp.sh` and parse its JSON output.
+5. The script first probes cached state. If the caches are unusable, it probes fixed port 9222 and verifies the live Chrome main process against the managed profile and port arguments.
+6. If `reused` is `true`, the existing managed Chrome was found and both cache files are normalized. Call the configured MCP tools directly.
+7. If `reused` is `false`, a fresh managed Chrome was started on 9222. Call the configured MCP tools after the endpoint becomes ready.
+8. If either fallback script exits non-zero, surface the error. Do not use an unbound MCP, `open -a`, a different port, or any path that bypasses the managed profile.
 
 ## Rules
 
 - Always use the managed custom profile directory. Do not use the user's default daily-browsing Chrome profile.
 - Port is fixed to 9222. Never pick an alternative port.
+- Bind CDP to loopback only. Xpra may use HTTP/WS with password authentication only on an RFC1918/private server address when the environment cannot accept TLS certificates. Refuse that transport on a public address; never expose an unauthenticated GUI or publish CDP directly.
 - Probe cached state first, then probe fixed port 9222 directly before deciding that no reusable endpoint exists.
 - Require both a valid Chrome CDP response and a matching Chrome main process before rebuilding state or returning `reused: true`.
 - If the stored state is stale but 9222 is free, start a fresh Chrome instance and rewrite the state files.
@@ -88,6 +118,7 @@ The repository `README.md` may use `skills/chrome-cdp-manager/...` paths because
 - Return structured JSON so callers do not parse logs.
 - Configure the stable HTTP endpoint at MCP process startup; never hardcode the rotating `webSocketDebuggerUrl` from `session.json`.
 - Do not pass `port` / `ws_url` per tool call. If the MCP process started without the fixed endpoint, update its host configuration and restart that MCP process.
+- Do not claim Playwright-native fidelity when using `connectOverCDP`; choose an isolated Playwright browser if the requested test depends on features unavailable through CDP.
 
 ## Output contract
 

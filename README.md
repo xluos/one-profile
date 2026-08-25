@@ -4,12 +4,15 @@
 
 - `chrome-cdp-manager`
 
-它的目标不是做一个“通用浏览器路由器”，而是稳定地管理一个可复用的 Chrome CDP 实例，让后续的 Agent/自动化流程能够：
+它的目标不是做一个“通用浏览器路由器”，而是为持久 Chrome 选择正确控制面，并稳定管理可复用的 CDP 实例，让后续的 Agent/自动化流程能够：
 
 - 复用同一个 Chrome 实例
 - 复用同一个自定义 profile 目录
 - 保留登录状态、Cookie 和本地浏览器数据
 - 在端口失效或状态脏掉时自动恢复
+- 默认复用健康的 Codex/ChatGPT Chrome 扩展
+- 深度诊断时路由到 Chrome DevTools MCP，可重复流程时路由到 Playwright
+- 在无物理显示器的服务器上按需自动开启 Xpra，直接提供外部可访问界面
 
 ## Skill 位置
 
@@ -23,6 +26,13 @@ skills/chrome-cdp-manager/
 - 你需要先手动登录，再让后续 Agent 复用这个浏览器状态
 - 你希望 Agent 通过 Chrome DevTools Protocol 连接到同一个浏览器实例
 - 你希望把 profile 和端口状态放到固定目录统一管理
+- 你需要在服务器常驻同一个 headed Chrome，并在登录或 MFA 时远程接管 GUI
+
+控制面按目标选择：本机真实登录态和日常交互优先 Codex/ChatGPT Chrome 扩展；请求级调试、性能和内存分析使用 Chrome DevTools MCP；服务端多步骤流程、断言和回归使用带 token 的 Playwright MCP Bridge。
+
+服务端统一由 `scripts/server_browser.py` 检测和初始化。遇到登录、MFA、验证码或定位不到元素时，Skill 自动启动/复用 Xpra，并直接给出 `http://<server-ip>:14500/` 和密码；没有 local/tunnel 选择。外部 14500 由标准 HTTP/1.1/WebSocket 网关承接，Xpra 本体只在 `127.0.0.1:14501`；脚本拒绝在公网地址启动这种无 TLS 模式，CDP 也始终保持 `127.0.0.1:9222`。脚本还会自动安装官方 Playwright MCP Bridge、获取扩展生成的 token、配置对应 MCP，并通过真实 `browser_tabs` 调用验证。
+
+每次服务端 Chrome 启动或 Xpra 被确保可用时，脚本都会把可见 Chrome 主窗口移动到虚拟屏幕左上角并调整为 `100% × 100%`，再把实时屏幕和窗口尺寸写入 JSON 输出。
 
 ## 默认状态目录
 
