@@ -44,6 +44,7 @@ Chrome, its GUI bridge, and its persistent profile must outlive individual agent
 - Treat the Xpra URL and password as credentials. Reveal the password only when human access is needed; `detect` must not print it.
 - Persist and protect the profile as credentials. Cookies, local storage, IndexedDB, client certificates, and extension state may all be sensitive. Use restrictive filesystem permissions and do not commit, archive, or casually back up the profile.
 - Verify the live Chrome main-process arguments and `/json/version`; a responding port or a stale session file alone does not establish ownership.
+- When rediscovering Chrome, exclude child processes carrying `--type=...`; renderers may repeat the profile and debugging-port arguments and must never be written as the managed main PID.
 - Verify the Node.js engine requirement of the installed MCP versions. If a compatible Node is installed under a user-local prefix, pass that `PATH` explicitly in the MCP host configuration; an interactive shell probe can succeed while the host later launches the same MCP with an older system Node.
 
 Use `scripts/server_browser.py` for the complete lifecycle:

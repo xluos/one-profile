@@ -362,11 +362,9 @@ def window_geometry(window_id: str) -> dict[str, int]:
 
 
 def arguments_are_headless(arguments: list[str]) -> bool:
-    return any(
-        argument == "--headless"
-        or argument.startswith("--headless=")
-        or argument == "--ozone-platform=headless"
-        for argument in arguments
+    command_text = " ".join(arguments)
+    return bool(re.search(r"(?:^|\s)--headless(?:=\S+)?(?:\s|$)", command_text)) or bool(
+        re.search(r"(?:^|\s)--ozone-platform=headless(?:\s|$)", command_text)
     )
 
 

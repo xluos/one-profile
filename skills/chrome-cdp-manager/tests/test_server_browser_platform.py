@@ -16,6 +16,7 @@ import server_browser  # noqa: E402
 class XpraPlatformTests(unittest.TestCase):
     def test_headless_chrome_arguments_are_detected(self) -> None:
         self.assertTrue(server_browser.arguments_are_headless(["chrome", "--headless=new"]))
+        self.assertTrue(server_browser.arguments_are_headless(["chrome --headless=new --remote-debugging-port=9222"]))
         self.assertTrue(server_browser.arguments_are_headless(["chrome", "--ozone-platform=headless"]))
         self.assertFalse(server_browser.arguments_are_headless(["chrome", "--remote-debugging-port=9222"]))
 

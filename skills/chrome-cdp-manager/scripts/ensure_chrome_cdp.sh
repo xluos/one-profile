@@ -100,6 +100,8 @@ for line in output.splitlines():
     pid, command = parts
     if not is_browser_process(pid, command):
         continue
+    if "--type=" in command:
+        continue
     if profile_arg in command and port_arg in command:
         print(pid)
         sys.exit(0)
