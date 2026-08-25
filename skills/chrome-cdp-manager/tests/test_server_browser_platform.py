@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 
-import hashlib
 import json
 import pathlib
 import sys
 import tempfile
 import unittest
-import urllib.request
 from types import SimpleNamespace
 from unittest import mock
 
@@ -84,16 +82,6 @@ class XpraPlatformTests(unittest.TestCase):
             with mock.patch.object(server_browser, "PROFILE_DIR", profile):
                 state = server_browser.bridge_profile_state()
         self.assertEqual(state["path"], str(extension))
-
-    def test_bridge_update_server_serves_manifest_and_crx(self) -> None:
-        with server_browser.bridge_update_server() as update_url:
-            update_xml = urllib.request.urlopen(update_url).read().decode()
-            crx_url = update_url.replace("update.xml", "bridge.crx")
-            crx_digest = hashlib.sha256(urllib.request.urlopen(crx_url).read()).hexdigest()
-        self.assertIn(server_browser.BRIDGE_ID, update_xml)
-        self.assertIn(server_browser.BRIDGE_VERSION, update_xml)
-        self.assertEqual(crx_digest, server_browser.BRIDGE_CRX_SHA256)
-
 
 if __name__ == "__main__":
     unittest.main()

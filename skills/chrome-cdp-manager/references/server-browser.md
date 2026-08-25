@@ -85,7 +85,7 @@ Do not export cookies as the default login-transfer mechanism. A persistent prof
 
 ## Playwright MCP Bridge and token
 
-The server branch carries a checksum-pinned official Bridge CRX for extension `mmlmfjhmonkocbjadbfplnigmagldckm`. It verifies the asset and manifest, safely extracts it under the managed state directory, and temporarily serves the verified CRX from a loopback-only update endpoint while Chrome enterprise policy installs it. It then restarts only the managed Chrome and verifies that the extension appears in the live browser. This makes initialization independent of Google Web Store reachability while preserving the extension ID from the signed manifest key and working on branded Chrome versions that ignore command-line `--load-extension`. It then:
+The server branch carries a checksum-pinned official Bridge CRX for extension `mmlmfjhmonkocbjadbfplnigmagldckm`. It verifies the asset and manifest, installs a root-owned copy plus Chrome's Linux external-extension JSON under `/opt/google/chrome/extensions`, then restarts only the managed Chrome and verifies that the extension appears in the live browser. This makes initialization independent of Google Web Store reachability while preserving the extension ID from the signed manifest key and working on branded Chrome versions that ignore command-line `--load-extension`. It then:
 
 1. opens the Bridge Status page so the official extension generates its 32-byte URL-safe token;
 2. captures that value inside the virtual display and stores it in `~/.agents-profile/main/playwright-mcp-extension-token` with mode `0600`;

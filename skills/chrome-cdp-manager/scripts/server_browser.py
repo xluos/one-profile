@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-import contextlib
 import getpass
 import hashlib
-import http.server
 import ipaddress
 import json
 import os
@@ -17,9 +15,9 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.request
+import urllib.parse
 import zipfile
 from typing import Any
 
@@ -39,6 +37,8 @@ BRIDGE_CRX_SHA256 = "ee82572c3da263f567e0f5167cb5dad2376fcf0f248c8c154d3cc7e7ba6
 BRIDGE_CRX = SCRIPT_DIR.parent / "assets" / f"playwright-mcp-bridge-{BRIDGE_VERSION}.crx"
 BRIDGE_DIR = STATE_DIR / f"playwright-mcp-bridge-{BRIDGE_VERSION}"
 BRIDGE_POLICY = pathlib.Path("/etc/opt/chrome/policies/managed/playwright-mcp-bridge.json")
+BRIDGE_EXTERNAL_CRX = pathlib.Path(f"/opt/google/chrome/extensions/playwright-mcp-bridge-{BRIDGE_VERSION}.crx")
+BRIDGE_EXTERNAL_CONFIG = pathlib.Path(f"/opt/google/chrome/extensions/{BRIDGE_ID}.json")
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 XPRA_KEY_FINGERPRINT = "B4993B57323148E37977E5D873254CAD17978FAF"
 XPRA_BOOKWORM_SOURCE = """Types: deb
@@ -117,46 +117,6 @@ def prepare_bridge_extension() -> pathlib.Path:
         if temporary.exists():
             shutil.rmtree(temporary)
     return BRIDGE_DIR
-
-
-@contextlib.contextmanager
-def bridge_update_server():
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            if self.path == "/bridge.crx":
-                content = BRIDGE_CRX.read_bytes()
-                content_type = "application/x-chrome-extension"
-            elif self.path == "/update.xml":
-                port = self.server.server_address[1]
-                content = (
-                    '<?xml version="1.0" encoding="UTF-8"?>'
-                    '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">'
-                    f'<app appid="{BRIDGE_ID}"><updatecheck '
-                    f'codebase="http://127.0.0.1:{port}/bridge.crx" version="{BRIDGE_VERSION}"/>'
-                    '</app></gupdate>'
-                ).encode()
-                content_type = "text/xml"
-            else:
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
-
-        def log_message(self, format: str, *args: Any) -> None:
-            return
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/update.xml"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def executable(name: str) -> str | None:
@@ -246,6 +206,7 @@ def detect() -> dict[str, Any]:
             "bundled_asset_valid": BRIDGE_CRX.is_file() and hashlib.sha256(BRIDGE_CRX.read_bytes()).hexdigest() == BRIDGE_CRX_SHA256,
             "unpacked_extension_ready": bridge_directory_valid(BRIDGE_DIR),
             "policy_file": str(BRIDGE_POLICY),
+            "external_config": str(BRIDGE_EXTERNAL_CONFIG),
             "token_file": str(STATE_DIR / "playwright-mcp-extension-token"),
             "token_present": (STATE_DIR / "playwright-mcp-extension-token").exists(),
             "token_mode": file_mode(STATE_DIR / "playwright-mcp-extension-token"),
@@ -589,29 +550,26 @@ def read_bridge_token() -> str:
 
 
 def capture_bridge_token() -> str:
-    chrome = executable("google-chrome")
-    if not chrome or not executable("xdotool") or not executable("xclip"):
-        raise RuntimeError("google-chrome, xdotool, and xclip are required to capture the Bridge token")
-    run([
-        chrome,
-        f"--user-data-dir={PROFILE_DIR}",
-        f"chrome-extension://{BRIDGE_ID}/status.html",
-    ], check=False, env=command_env())
+    if not executable("xdotool") or not executable("xclip"):
+        raise RuntimeError("xdotool and xclip are required to capture the Bridge token")
+    status_url = f"chrome-extension://{BRIDGE_ID}/status.html"
+    target_url = "http://127.0.0.1:9222/json/new?" + urllib.parse.quote(status_url, safe=":/")
+    request = urllib.request.Request(target_url, method="PUT")
+    with urllib.request.urlopen(request, timeout=5):
+        pass
     env = command_env()
     window_id = ""
     for _ in range(50):
-        active = run(["xdotool", "getactivewindow"], check=False, env=env)
-        if active.returncode == 0:
-            candidate = active.stdout.strip()
-            title = run(["xdotool", "getwindowname", candidate], check=False, env=env)
-            if "Playwright Extension Status" in title.stdout:
-                window_id = candidate
-                break
+        found = run(["xdotool", "search", "--onlyvisible", "--name", "Playwright Extension Status"], check=False, env=env)
+        candidates = found.stdout.split()
+        if candidates:
+            window_id = candidates[-1]
+            break
         time.sleep(0.1)
     if not window_id:
         raise RuntimeError("Playwright Extension status page did not become active")
     run([
-        "xdotool", "windowactivate", "--sync", window_id,
+        "xdotool", "windowfocus", "--sync", window_id,
         "key", "--clearmodifiers", "ctrl+a",
         "key", "--clearmodifiers", "ctrl+c",
     ], env=env)
@@ -659,33 +617,31 @@ def bridge_profile_state() -> dict[str, Any] | None:
 def install_bridge() -> dict[str, Any]:
     ensure_permissions()
     extension_directory = prepare_bridge_extension()
-    with bridge_update_server() as update_url:
-        policy = {
-            "ExtensionSettings": {
-                BRIDGE_ID: {
-                    "installation_mode": "force_installed",
-                    "update_url": update_url,
-                }
-            }
-        }
-        policy_source = STATE_DIR / "playwright-mcp-bridge-policy.json"
-        policy_source.write_text(json.dumps(policy, indent=2) + "\n")
-        run(["sudo", "install", "-D", "-m", "0644", str(policy_source), str(BRIDGE_POLICY)])
-        stop_managed_chrome()
-        chrome = ensure_chrome()
-        extension_state = None
-        for _ in range(60):
-            extension_state = bridge_profile_state()
-            if extension_state:
-                break
-            time.sleep(1)
+    external_config_source = STATE_DIR / "playwright-mcp-bridge-external.json"
+    external_config_source.write_text(json.dumps({
+        "external_crx": str(BRIDGE_EXTERNAL_CRX),
+        "external_version": BRIDGE_VERSION,
+    }, indent=2) + "\n")
+    empty_policy_source = STATE_DIR / "playwright-mcp-bridge-policy.json"
+    empty_policy_source.write_text("{}\n")
+    run(["sudo", "install", "-D", "-m", "0644", str(BRIDGE_CRX), str(BRIDGE_EXTERNAL_CRX)])
+    run(["sudo", "install", "-D", "-m", "0644", str(external_config_source), str(BRIDGE_EXTERNAL_CONFIG)])
+    run(["sudo", "install", "-D", "-m", "0644", str(empty_policy_source), str(BRIDGE_POLICY)])
+    stop_managed_chrome()
+    chrome = ensure_chrome()
+    extension_state = None
+    for _ in range(60):
+        extension_state = bridge_profile_state()
+        if extension_state:
+            break
+        time.sleep(1)
     if not extension_state:
         raise RuntimeError("Chrome did not load the bundled Playwright MCP Bridge extension")
     capture_bridge_token()
     return {
         "installed": True,
         "extension_id": BRIDGE_ID,
-        "source": "bundled-official-crx",
+        "source": "bundled-official-crx-linux-external",
         "bundled_path": str(extension_directory),
         "extension": extension_state,
         "token_file": str(STATE_DIR / "playwright-mcp-extension-token"),
