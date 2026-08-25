@@ -366,6 +366,12 @@ def ensure_system_packages() -> dict[str, Any]:
     ], no_recommends=True)
     if warning:
         warnings.append(warning)
+    systemctl = executable("systemctl")
+    if systemctl:
+        disabled = run(["sudo", systemctl, "disable", "--now", "xpra-server.socket"], check=False)
+        if disabled.returncode != 0 and port_open("127.0.0.1", XPRA_PORT):
+            detail = (disabled.stdout + disabled.stderr).strip()
+            raise RuntimeError(f"failed to disable packaged xpra-server.socket on port {XPRA_PORT}: {detail}")
     chinese_font = ensure_chinese_font()
     if system_chrome_path():
         return {"chinese_font": chinese_font, "warnings": warnings}

@@ -61,6 +61,7 @@ scripts/server_browser.py bridge --verify
 ```
 
 The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`, plus `gir1.2-gtk-3.0` and `python3-gi` because Xpra's X11 shadow backend imports GDK at runtime. Installing Xvfb and xdotool alone is insufficient.
+The official Xpra package may enable `xpra-server.socket` on `14500`; initialization disables that packaged socket so the authenticated managed HTTP gateway can own the external port without colliding with a root socket-activated Xpra service.
 
 `detect` is read-only. The other mutating operations require an explicit flag. Every command emits JSON; callers should consume `url`, `password`, and verification fields instead of scraping logs.
 
