@@ -3,6 +3,7 @@
 import pathlib
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -27,6 +28,22 @@ class XpraPlatformTests(unittest.TestCase):
         ):
             with self.assertRaises(RuntimeError):
                 server_browser.xpra_repo_codename()
+
+    def test_apt_nonzero_is_warning_when_requested_packages_are_present(self) -> None:
+        failed = SimpleNamespace(returncode=100, stdout="dpkg failed\n", stderr="external package error\n")
+        with mock.patch.object(server_browser, "run", return_value=failed), mock.patch.object(
+            server_browser, "package_installed", return_value=True
+        ):
+            warning = server_browser.apt_install(["xpra-server", "xpra-html5"])
+        self.assertIn("all requested packages are installed", warning)
+
+    def test_apt_nonzero_fails_when_requested_package_is_missing(self) -> None:
+        failed = SimpleNamespace(returncode=100, stdout="dpkg failed\n", stderr="external package error\n")
+        with mock.patch.object(server_browser, "run", return_value=failed), mock.patch.object(
+            server_browser, "package_installed", side_effect=[True, False]
+        ):
+            with self.assertRaisesRegex(RuntimeError, "xpra-html5"):
+                server_browser.apt_install(["xpra-server", "xpra-html5"])
 
 
 if __name__ == "__main__":

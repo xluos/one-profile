@@ -39,12 +39,14 @@ class ChineseFontTests(unittest.TestCase):
         present = {"available": True, "match": "Noto Sans CJK SC", "reason": None}
         with mock.patch.object(
             server_browser, "chinese_font_state", side_effect=[missing, present]
-        ), mock.patch.object(server_browser, "run") as run_mock:
+        ), mock.patch.object(server_browser, "apt_install", return_value=None) as install_mock, mock.patch.object(
+            server_browser, "run"
+        ) as run_mock:
             result = server_browser.ensure_chinese_font()
         self.assertTrue(result["installed"])
-        self.assertEqual(run_mock.call_count, 2)
-        self.assertIn("fonts-noto-cjk", run_mock.call_args_list[0].args[0])
-        self.assertEqual(run_mock.call_args_list[1].args[0], ["fc-cache", "-f"])
+        install_mock.assert_called_once_with(["fonts-noto-cjk"], no_recommends=True)
+        run_mock.assert_called_once()
+        self.assertEqual(run_mock.call_args.args[0], ["fc-cache", "-f"])
 
 
 if __name__ == "__main__":

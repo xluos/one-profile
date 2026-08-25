@@ -192,6 +192,31 @@ def debian_bookworm_compatible() -> bool:
     return debian_base_major() == 12 and apt_suite_present("bookworm")
 
 
+def package_installed(name: str) -> bool:
+    result = run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", name], check=False)
+    return result.returncode == 0 and result.stdout.startswith("ii")
+
+
+def apt_install(
+    packages: list[str], *, verify_packages: list[str] | None = None, no_recommends: bool = False
+) -> str | None:
+    command = ["sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y"]
+    if no_recommends:
+        command.append("--no-install-recommends")
+    command.extend(packages)
+    result = run(command, check=False)
+    if result.returncode == 0:
+        return None
+    expected = verify_packages or packages
+    missing = [name for name in expected if not package_installed(name)]
+    if missing:
+        detail = "\n".join((result.stdout + result.stderr).strip().splitlines()[-12:])
+        raise RuntimeError(f"apt failed and required packages are missing ({', '.join(missing)}):\n{detail}")
+    detail_lines = (result.stdout + result.stderr).strip().splitlines()
+    detail = " | ".join(detail_lines[-4:]) if detail_lines else f"exit status {result.returncode}"
+    return f"apt returned {result.returncode}, but all requested packages are installed; unrelated dpkg issue preserved: {detail}"
+
+
 def xpra_repo_codename() -> str:
     release = os_release()
     distro_id = release.get("ID")
@@ -206,14 +231,14 @@ def xpra_repo_codename() -> str:
     )
 
 
-def ensure_xpra_stable_repo() -> None:
+def ensure_xpra_stable_repo() -> list[str]:
+    warnings: list[str] = []
     codename = xpra_repo_codename()
     if codename != "bookworm":
         raise RuntimeError(f"unsupported Xpra repository codename: {codename}")
-    run([
-        "sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y",
-        "ca-certificates", "curl", "gnupg",
-    ])
+    warning = apt_install(["ca-certificates", "curl", "gnupg"])
+    if warning:
+        warnings.append(warning)
     with tempfile.TemporaryDirectory(prefix="xpra-repo-") as directory:
         key = pathlib.Path(directory) / "xpra.asc"
         sources = pathlib.Path(directory) / "xpra.sources"
@@ -239,45 +264,48 @@ def ensure_xpra_stable_repo() -> None:
             raise RuntimeError("the downloaded Xpra Bookworm source definition is not the expected official repository")
         run(["sudo", "install", "-m", "0644", str(key), "/usr/share/keyrings/xpra.asc"])
         run(["sudo", "install", "-m", "0644", str(sources), "/etc/apt/sources.list.d/xpra.sources"])
+    return warnings
 
 
 def ensure_chinese_font() -> dict[str, Any]:
     before = chinese_font_state()
     if before["available"]:
         return {"installed": False, **before}
-    run([
-        "sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y",
-        "--no-install-recommends", "fonts-noto-cjk",
-    ])
+    warning = apt_install(["fonts-noto-cjk"], no_recommends=True)
     run(["fc-cache", "-f"], env=command_env())
     after = chinese_font_state()
     if not after["available"]:
         raise RuntimeError("fonts-noto-cjk was installed, but fontconfig still reports no Chinese font")
-    return {"installed": True, **after}
+    result = {"installed": True, **after}
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 def ensure_system_packages() -> dict[str, Any]:
     if sys.platform != "linux" or not executable("apt-get"):
         raise RuntimeError("automatic initialization currently supports Debian-family Linux only")
-    ensure_xpra_stable_repo()
+    warnings = ensure_xpra_stable_repo()
     run(["sudo", "apt-get", "update"])
-    run([
-        "sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y",
-        "--no-install-recommends",
+    warning = apt_install([
         "xpra-server", "xpra-x11", "xpra-html5", "xvfb", "openbox", "xdotool", "xclip",
         "curl", "ca-certificates", "openssl", "fontconfig",
-    ])
+    ], no_recommends=True)
+    if warning:
+        warnings.append(warning)
     chinese_font = ensure_chinese_font()
     if executable("google-chrome"):
-        return {"chinese_font": chinese_font}
+        return {"chinese_font": chinese_font, "warnings": warnings}
     with tempfile.TemporaryDirectory(prefix="chrome-install-") as directory:
         package = pathlib.Path(directory) / "google-chrome-stable_current_amd64.deb"
         urllib.request.urlretrieve(
             "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
             package,
         )
-        run(["sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", str(package)])
-    return {"chinese_font": chinese_font}
+        warning = apt_install([str(package)], verify_packages=["google-chrome-stable"])
+        if warning:
+            warnings.append(warning)
+    return {"chinese_font": chinese_font, "warnings": warnings}
 
 
 def ensure_user_tools() -> None:
