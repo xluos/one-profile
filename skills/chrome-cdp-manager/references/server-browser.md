@@ -30,9 +30,11 @@ Chrome, its GUI bridge, and its persistent profile must outlive individual agent
 ## Provisioning invariants
 
 - Launch Chrome with a dedicated `--user-data-dir`; never reuse a person's default daily profile or copy a whole profile between machines.
+- Ensure the server branch has an official system Google Chrome and pass it as `CHROME_BIN`. A user-local `google-chrome` may be a wrapper that forcibly appends headless flags, and Chrome enterprise policy for the Playwright Bridge must target a supported branded browser.
 - Inherit a valid `DISPLAY` from Xpra/Xvfb and do not pass `--headless` when a person must see the same browser for QR login, MFA, consent, or extension setup.
 - A healthy CDP response from an existing managed `--headless` Chrome is not sufficient for the server GUI branch. Detect headless and headless-Ozone process arguments, preserve its profile, and perform a controlled restart as headed Chrome on the managed Xvfb before checking window geometry or installing the Bridge.
 - After Chrome starts and whenever Xpra is ensured, move every visible managed Chrome top-level window to `(0, 0)` and resize it to `100% × 100%` of the virtual display. Verify and return the resulting window geometry so stale profile placement cannot leave a narrow UI.
+- Locate the visible top-level window by the managed Chrome main PID first, with Google Chrome and Chromium class names only as fallbacks; Chrome for Testing and branded Chrome do not use the same X11 class.
 - Keep CDP on `127.0.0.1:9222` with no external listener.
 - Bind Xpra HTTP/WS externally with password authentication on the default port `14500`. This unencrypted transport is allowed only when the detected address is private/RFC1918; refuse to start it on a public address. The server network must remain trusted because page pixels, keystrokes, and session traffic are not TLS-encrypted.
 - Keep Xpra's mixed-protocol listener on loopback `14501`. A small Node HTTP/1.1/WebSocket gateway owns external `14500`, normalizes proxy-style request targets, and forwards only to that loopback backend. This avoids Xpra 3.1 misclassifying some browser HTTP requests as native protocol packets.

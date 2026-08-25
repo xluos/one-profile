@@ -49,11 +49,21 @@ def run(command: list[str], *, check: bool = True, env: dict[str, str] | None = 
     return subprocess.run(command, check=check, text=True, capture_output=True, env=env)
 
 
+def system_chrome_path() -> str | None:
+    for candidate in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"):
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def command_env() -> dict[str, str]:
     env = os.environ.copy()
     path_parts = [str(LOCAL_BIN), "/usr/local/bin", "/usr/bin", "/bin"]
     env["PATH"] = ":".join(dict.fromkeys(path_parts + env.get("PATH", "").split(":")))
     env["DISPLAY"] = DISPLAY
+    chrome_path = system_chrome_path()
+    if chrome_path:
+        env["CHROME_BIN"] = chrome_path
     return env
 
 
@@ -300,7 +310,7 @@ def ensure_system_packages() -> dict[str, Any]:
     if warning:
         warnings.append(warning)
     chinese_font = ensure_chinese_font()
-    if executable("google-chrome"):
+    if system_chrome_path():
         return {"chinese_font": chinese_font, "warnings": warnings}
     with tempfile.TemporaryDirectory(prefix="chrome-install-") as directory:
         package = pathlib.Path(directory) / "google-chrome-stable_current_amd64.deb"
@@ -311,6 +321,8 @@ def ensure_system_packages() -> dict[str, Any]:
         warning = apt_install([str(package)], verify_packages=["google-chrome-stable"])
         if warning:
             warnings.append(warning)
+    if not system_chrome_path():
+        raise RuntimeError("google-chrome-stable was installed, but no executable system Chrome was found")
     return {"chinese_font": chinese_font, "warnings": warnings}
 
 
@@ -377,7 +389,7 @@ def managed_chrome_is_headless(pid: int) -> bool:
     return arguments_are_headless(arguments)
 
 
-def maximize_chrome_windows() -> dict[str, Any]:
+def maximize_chrome_windows(chrome_pid: int) -> dict[str, Any]:
     if not executable("xdotool"):
         raise RuntimeError("xdotool is required to maximize server Chrome")
     env = command_env()
@@ -387,8 +399,17 @@ def maximize_chrome_windows() -> dict[str, Any]:
     display_width, display_height = (int(value) for value in display_size)
     window_ids: list[str] = []
     for _ in range(50):
-        found = run(["xdotool", "search", "--onlyvisible", "--class", "google-chrome"], check=False, env=env)
+        found = run(["xdotool", "search", "--onlyvisible", "--pid", str(chrome_pid)], check=False, env=env)
         window_ids = list(dict.fromkeys(found.stdout.split()))
+        if not window_ids:
+            for window_class in ("google-chrome", "chromium-browser", "chromium"):
+                found = run(
+                    ["xdotool", "search", "--onlyvisible", "--class", window_class],
+                    check=False,
+                    env=env,
+                )
+                window_ids.extend(found.stdout.split())
+            window_ids = list(dict.fromkeys(window_ids))
         if window_ids:
             break
         time.sleep(0.1)
@@ -417,7 +438,7 @@ def ensure_chrome() -> dict[str, Any]:
         result = run([str(SCRIPT_DIR / "ensure_chrome_cdp.sh")], env=command_env())
         payload = json.loads(result.stdout)
         payload["restarted_from_headless"] = True
-    payload["window_layout"] = maximize_chrome_windows()
+    payload["window_layout"] = maximize_chrome_windows(int(payload["pid"]))
     return payload
 
 
