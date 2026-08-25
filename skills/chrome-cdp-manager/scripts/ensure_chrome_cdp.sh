@@ -360,14 +360,6 @@ launch_chrome() {
     --no-default-browser-check
   )
 
-  if [[ -n "${CHROME_CDP_LOAD_EXTENSION:-}" ]]; then
-    if [[ ! -f "${CHROME_CDP_LOAD_EXTENSION}/manifest.json" ]]; then
-      echo "Chrome extension directory is invalid: ${CHROME_CDP_LOAD_EXTENSION}" >&2
-      return 1
-    fi
-    launch_args+=(--load-extension="${CHROME_CDP_LOAD_EXTENSION}")
-  fi
-
   : > "${LAUNCH_LOG}"
 
   if [[ "$(uname)" == "Darwin" && "${chrome_path}" == *"/Contents/MacOS/"* ]]; then

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import getpass
 import hashlib
+import http.server
 import ipaddress
 import json
 import os
@@ -15,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
@@ -70,8 +73,6 @@ def command_env() -> dict[str, str]:
     chrome_path = system_chrome_path()
     if chrome_path:
         env["CHROME_BIN"] = chrome_path
-    if bridge_directory_valid(BRIDGE_DIR):
-        env["CHROME_CDP_LOAD_EXTENSION"] = str(BRIDGE_DIR)
     return env
 
 
@@ -116,6 +117,46 @@ def prepare_bridge_extension() -> pathlib.Path:
         if temporary.exists():
             shutil.rmtree(temporary)
     return BRIDGE_DIR
+
+
+@contextlib.contextmanager
+def bridge_update_server():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/bridge.crx":
+                content = BRIDGE_CRX.read_bytes()
+                content_type = "application/x-chrome-extension"
+            elif self.path == "/update.xml":
+                port = self.server.server_address[1]
+                content = (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">'
+                    f'<app appid="{BRIDGE_ID}"><updatecheck '
+                    f'codebase="http://127.0.0.1:{port}/bridge.crx" version="{BRIDGE_VERSION}"/>'
+                    '</app></gupdate>'
+                ).encode()
+                content_type = "text/xml"
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/update.xml"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def executable(name: str) -> str | None:
@@ -618,20 +659,26 @@ def bridge_profile_state() -> dict[str, Any] | None:
 def install_bridge() -> dict[str, Any]:
     ensure_permissions()
     extension_directory = prepare_bridge_extension()
-    # A previous run may have configured Web Store force-installation. Clear
-    # only this workflow-owned policy so offline hosts do not keep retrying it.
-    policy = {}
-    policy_source = STATE_DIR / "playwright-mcp-bridge-policy.json"
-    policy_source.write_text(json.dumps(policy, indent=2) + "\n")
-    run(["sudo", "install", "-D", "-m", "0644", str(policy_source), str(BRIDGE_POLICY)])
-    stop_managed_chrome()
-    chrome = ensure_chrome()
-    extension_state = None
-    for _ in range(60):
-        extension_state = bridge_profile_state()
-        if extension_state:
-            break
-        time.sleep(1)
+    with bridge_update_server() as update_url:
+        policy = {
+            "ExtensionSettings": {
+                BRIDGE_ID: {
+                    "installation_mode": "force_installed",
+                    "update_url": update_url,
+                }
+            }
+        }
+        policy_source = STATE_DIR / "playwright-mcp-bridge-policy.json"
+        policy_source.write_text(json.dumps(policy, indent=2) + "\n")
+        run(["sudo", "install", "-D", "-m", "0644", str(policy_source), str(BRIDGE_POLICY)])
+        stop_managed_chrome()
+        chrome = ensure_chrome()
+        extension_state = None
+        for _ in range(60):
+            extension_state = bridge_profile_state()
+            if extension_state:
+                break
+            time.sleep(1)
     if not extension_state:
         raise RuntimeError("Chrome did not load the bundled Playwright MCP Bridge extension")
     capture_bridge_token()
