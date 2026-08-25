@@ -97,5 +97,12 @@ class XpraPlatformTests(unittest.TestCase):
         self.assertNotIn(server_browser.BRIDGE_ID, settings)
         self.assertEqual(settings["other"], {"state": 1})
 
+    def test_bridge_token_is_redacted_from_probe_output(self) -> None:
+        secret = "example-secret-token"
+        self.assertEqual(
+            server_browser.redact_secret(f"https://example.test/?token={secret}", secret),
+            "https://example.test/?token=<redacted>",
+        )
+
 if __name__ == "__main__":
     unittest.main()

@@ -544,6 +544,10 @@ def response_text(result: dict[str, Any], index: int = -1) -> str:
     return "\n".join(block.get("text", "") for block in blocks if block.get("type") == "text")
 
 
+def redact_secret(value: str, secret: str) -> str:
+    return value.replace(secret, "<redacted>") if secret else value
+
+
 def write_secret(path: pathlib.Path, value: str, *, trailing_newline: bool = True) -> None:
     path.write_text(value + ("\n" if trailing_newline else ""))
     path.chmod(0o600)
@@ -937,8 +941,8 @@ def verify_bridge() -> dict[str, Any]:
     return {
         "ok": True,
         "server": result["server"],
-        "tabs": response_text(result, 0),
-        "snapshot": response_text(result, 1),
+        "tabs": redact_secret(response_text(result, 0), token),
+        "snapshot": redact_secret(response_text(result, 1), token),
     }
 
 
