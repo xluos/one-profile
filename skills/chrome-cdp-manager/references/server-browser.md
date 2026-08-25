@@ -31,6 +31,7 @@ Chrome, its GUI bridge, and its persistent profile must outlive individual agent
 
 - Launch Chrome with a dedicated `--user-data-dir`; never reuse a person's default daily profile or copy a whole profile between machines.
 - Inherit a valid `DISPLAY` from Xpra/Xvfb and do not pass `--headless` when a person must see the same browser for QR login, MFA, consent, or extension setup.
+- A healthy CDP response from an existing managed `--headless` Chrome is not sufficient for the server GUI branch. Detect headless and headless-Ozone process arguments, preserve its profile, and perform a controlled restart as headed Chrome on the managed Xvfb before checking window geometry or installing the Bridge.
 - After Chrome starts and whenever Xpra is ensured, move every visible managed Chrome top-level window to `(0, 0)` and resize it to `100% × 100%` of the virtual display. Verify and return the resulting window geometry so stale profile placement cannot leave a narrow UI.
 - Keep CDP on `127.0.0.1:9222` with no external listener.
 - Bind Xpra HTTP/WS externally with password authentication on the default port `14500`. This unencrypted transport is allowed only when the detected address is private/RFC1918; refuse to start it on a public address. The server network must remain trusted because page pixels, keystrokes, and session traffic are not TLS-encrypted.

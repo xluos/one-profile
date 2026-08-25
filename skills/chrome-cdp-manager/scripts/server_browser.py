@@ -361,6 +361,24 @@ def window_geometry(window_id: str) -> dict[str, int]:
     return values
 
 
+def arguments_are_headless(arguments: list[str]) -> bool:
+    return any(
+        argument == "--headless"
+        or argument.startswith("--headless=")
+        or argument == "--ozone-platform=headless"
+        for argument in arguments
+    )
+
+
+def managed_chrome_is_headless(pid: int) -> bool:
+    try:
+        command = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    arguments = [value.decode(errors="replace") for value in command if value]
+    return arguments_are_headless(arguments)
+
+
 def maximize_chrome_windows() -> dict[str, Any]:
     if not executable("xdotool"):
         raise RuntimeError("xdotool is required to maximize server Chrome")
@@ -396,6 +414,11 @@ def ensure_chrome() -> dict[str, Any]:
     ensure_x_display()
     result = run([str(SCRIPT_DIR / "ensure_chrome_cdp.sh")], env=command_env())
     payload = json.loads(result.stdout)
+    if managed_chrome_is_headless(int(payload["pid"])):
+        stop_managed_chrome()
+        result = run([str(SCRIPT_DIR / "ensure_chrome_cdp.sh")], env=command_env())
+        payload = json.loads(result.stdout)
+        payload["restarted_from_headless"] = True
     payload["window_layout"] = maximize_chrome_windows()
     return payload
 

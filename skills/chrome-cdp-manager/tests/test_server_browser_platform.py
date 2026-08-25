@@ -14,6 +14,11 @@ import server_browser  # noqa: E402
 
 
 class XpraPlatformTests(unittest.TestCase):
+    def test_headless_chrome_arguments_are_detected(self) -> None:
+        self.assertTrue(server_browser.arguments_are_headless(["chrome", "--headless=new"]))
+        self.assertTrue(server_browser.arguments_are_headless(["chrome", "--ozone-platform=headless"]))
+        self.assertFalse(server_browser.arguments_are_headless(["chrome", "--remote-debugging-port=9222"]))
+
     def test_velinux_without_debian_version_accepts_proven_bookworm_base(self) -> None:
         release = {"ID": "velinux", "VERSION_ID": "2", "VERSION_CODENAME": "lyra"}
         with mock.patch.object(server_browser, "os_release", return_value=release), mock.patch.object(
