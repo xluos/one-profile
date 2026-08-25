@@ -56,6 +56,8 @@ scripts/server_browser.py configure-codex --apply
 scripts/server_browser.py bridge --verify
 ```
 
+The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`; installing Xvfb and xdotool alone does not provide that command.
+
 `detect` is read-only. The other mutating operations require an explicit flag. Every command emits JSON; callers should consume `url`, `password`, and verification fields instead of scraping logs.
 
 ## Human login and recovery

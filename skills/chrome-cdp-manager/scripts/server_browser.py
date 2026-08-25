@@ -294,7 +294,7 @@ def ensure_system_packages() -> dict[str, Any]:
     warnings = ensure_xpra_stable_repo()
     run(["sudo", "apt-get", "update"])
     warning = apt_install([
-        "xpra-server", "xpra-x11", "xpra-html5", "xvfb", "openbox", "xdotool", "xclip",
+        "xpra-server", "xpra-x11", "xpra-html5", "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
         "curl", "ca-certificates", "openssl", "fontconfig",
     ], no_recommends=True)
     if warning:
