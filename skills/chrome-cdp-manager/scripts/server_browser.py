@@ -32,7 +32,13 @@ BRIDGE_ID = "mmlmfjhmonkocbjadbfplnigmagldckm"
 BRIDGE_UPDATE_URL = "https://clients2.google.com/service/update2/crx"
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 XPRA_KEY_FINGERPRINT = "B4993B57323148E37977E5D873254CAD17978FAF"
-XPRA_REPO_URL = "https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/bookworm/xpra.sources"
+XPRA_BOOKWORM_SOURCE = """Types: deb
+URIs: https://xpra.org
+Suites: bookworm
+Components: main
+Signed-By: /usr/share/keyrings/xpra.asc
+Architectures: amd64 arm64
+"""
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -253,7 +259,7 @@ def ensure_xpra_stable_repo() -> list[str]:
         ]
         if XPRA_KEY_FINGERPRINT not in fingerprints:
             raise RuntimeError("the downloaded Xpra repository key fingerprint does not match the pinned official key")
-        urllib.request.urlretrieve(XPRA_REPO_URL, sources)
+        sources.write_text(XPRA_BOOKWORM_SOURCE)
         source_text = sources.read_text()
         required_source_lines = (
             "URIs: https://xpra.org",
