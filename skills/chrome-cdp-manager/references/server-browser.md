@@ -60,7 +60,7 @@ scripts/server_browser.py configure-codex --apply
 scripts/server_browser.py bridge --verify
 ```
 
-The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`; installing Xvfb and xdotool alone does not provide that command.
+The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`, plus `gir1.2-gtk-3.0` and `python3-gi` because Xpra's X11 shadow backend imports GDK at runtime. Installing Xvfb and xdotool alone is insufficient.
 
 `detect` is read-only. The other mutating operations require an explicit flag. Every command emits JSON; callers should consume `url`, `password`, and verification fields instead of scraping logs.
 

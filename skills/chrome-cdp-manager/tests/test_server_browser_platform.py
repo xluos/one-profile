@@ -83,5 +83,19 @@ class XpraPlatformTests(unittest.TestCase):
                 state = server_browser.bridge_profile_state()
         self.assertEqual(state["path"], str(extension))
 
+    def test_empty_bridge_tombstone_is_removed_without_touching_other_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = pathlib.Path(directory) / "profile"
+            preferences = profile / "Default" / "Preferences"
+            preferences.parent.mkdir(parents=True)
+            preferences.write_text(json.dumps({
+                "extensions": {"settings": {server_browser.BRIDGE_ID: {}, "other": {"state": 1}}}
+            }))
+            with mock.patch.object(server_browser, "PROFILE_DIR", profile):
+                self.assertTrue(server_browser.clear_bridge_tombstone())
+            settings = json.loads(preferences.read_text())["extensions"]["settings"]
+        self.assertNotIn(server_browser.BRIDGE_ID, settings)
+        self.assertEqual(settings["other"], {"state": 1})
+
 if __name__ == "__main__":
     unittest.main()

@@ -360,7 +360,8 @@ def ensure_system_packages() -> dict[str, Any]:
     warnings = ensure_xpra_stable_repo()
     run(["sudo", "apt-get", "update"])
     warning = apt_install([
-        "xpra-server", "xpra-x11", "xpra-html5", "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
+        "xpra-server", "xpra-x11", "xpra-html5", "gir1.2-gtk-3.0", "python3-gi",
+        "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
         "curl", "ca-certificates", "openssl", "fontconfig",
     ], no_recommends=True)
     if warning:
@@ -614,6 +615,31 @@ def bridge_profile_state() -> dict[str, Any] | None:
     }
 
 
+def clear_bridge_tombstone() -> bool:
+    preferences = PROFILE_DIR / "Default" / "Preferences"
+    if not preferences.exists():
+        return False
+    try:
+        payload = json.loads(preferences.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    settings = payload.get("extensions", {}).get("settings", {})
+    if not isinstance(settings, dict) or settings.get(BRIDGE_ID) != {}:
+        return False
+    settings.pop(BRIDGE_ID)
+    descriptor, temporary_path = tempfile.mkstemp(dir=preferences.parent, prefix=".Preferences.")
+    try:
+        with os.fdopen(descriptor, "w") as temporary:
+            json.dump(payload, temporary, separators=(",", ":"))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, preferences)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+    return True
+
+
 def install_bridge() -> dict[str, Any]:
     ensure_permissions()
     extension_directory = prepare_bridge_extension()
@@ -628,6 +654,7 @@ def install_bridge() -> dict[str, Any]:
     run(["sudo", "install", "-D", "-m", "0644", str(external_config_source), str(BRIDGE_EXTERNAL_CONFIG)])
     run(["sudo", "install", "-D", "-m", "0644", str(empty_policy_source), str(BRIDGE_POLICY)])
     stop_managed_chrome()
+    cleared_tombstone = clear_bridge_tombstone()
     chrome = ensure_chrome()
     extension_state = None
     for _ in range(60):
@@ -643,6 +670,7 @@ def install_bridge() -> dict[str, Any]:
         "extension_id": BRIDGE_ID,
         "source": "bundled-official-crx-linux-external",
         "bundled_path": str(extension_directory),
+        "cleared_profile_tombstone": cleared_tombstone,
         "extension": extension_state,
         "token_file": str(STATE_DIR / "playwright-mcp-extension-token"),
         "chrome": chrome,
