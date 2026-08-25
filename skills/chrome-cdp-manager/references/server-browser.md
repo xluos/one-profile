@@ -46,13 +46,17 @@ Chrome, its GUI bridge, and its persistent profile must outlive individual agent
 - Treat the Xpra URL and password as credentials. Reveal the password only when human access is needed; `detect` must not print it.
 - Persist and protect the profile as credentials. Cookies, local storage, IndexedDB, client certificates, and extension state may all be sensitive. Use restrictive filesystem permissions and do not commit, archive, or casually back up the profile.
 - Verify the live Chrome main-process arguments and `/json/version`; a responding port or a stale session file alone does not establish ownership.
+- Chrome 151/152 Local Network Access can block internal CDN resources whose DNS resolves to a private address. The managed launch therefore disables `LocalNetworkAccessChecks` and `PrivateNetworkAccessForNavigations`, and reuse is valid only when those flags are present on the real main process. Preserve structured launch evidence; do not infer success from a config file or from a controller attached to another Chrome.
 - When rediscovering Chrome, exclude child processes carrying `--type=...`; renderers may repeat the profile and debugging-port arguments and must never be written as the managed main PID.
 - Verify the Node.js engine requirement of the installed MCP versions. If a compatible Node is installed under a user-local prefix, pass that `PATH` explicitly in the MCP host configuration; an interactive shell probe can succeed while the host later launches the same MCP with an older system Node.
 
 Use `scripts/server_browser.py` for the complete lifecycle:
 
 ```bash
+scripts/ensure_server_browser.py
+scripts/ensure_server_browser.py --repair --apply
 scripts/server_browser.py detect
+scripts/server_browser.py health
 scripts/server_browser.py init --apply --show-credential
 scripts/server_browser.py ui --ensure --show-credential
 scripts/server_browser.py bridge --apply
@@ -63,7 +67,9 @@ scripts/server_browser.py bridge --verify
 The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`, plus `gir1.2-gtk-3.0` and `python3-gi` because Xpra's X11 shadow backend imports GDK at runtime. Installing Xvfb and xdotool alone is insufficient.
 The official Xpra package may enable `xpra-server.socket` on `14500`; initialization disables that packaged socket so the authenticated managed HTTP gateway can own the external port without colliding with a root socket-activated Xpra service.
 
-`detect` is read-only. The other mutating operations require an explicit flag. Every command emits JSON; callers should consume `url`, `password`, and verification fields instead of scraping logs.
+`detect`, `health`, and the default `ensure_server_browser.py` invocation are read-only. Repair requires both `--repair` and `--apply`. A healthy `init --apply` or repair is a no-op; an unhealthy repair runs the full initializer and repeats the health check before reporting success. Every command emits JSON; callers should consume structured fields instead of scraping logs.
+
+Health issue codes cover missing system Chrome, unreachable or invalid managed CDP, a Network Service without the LNA flags, Xpra/gateway failures, incomplete Bridge assets/token, toolchain or non-interactive CLI failures, byted-lane runtime/daemon/extension failures, missing Skills, and invalid Codex MCP binding. A valid active business lane is not a health failure: preserve it when the extension has applied the current revision.
 
 ## Human login and recovery
 
@@ -93,7 +99,9 @@ The server branch carries a checksum-pinned official Bridge CRX for extension `m
 3. configures Codex Playwright MCP with `--extension` and `PLAYWRIGHT_MCP_EXTENSION_TOKEN`;
 4. starts the configured MCP with the host environment and calls `browser_tabs` before reporting success.
 
-For the currently validated MCP build, extension mode discovers Chrome from its channel default and does not honor the ordinary `--user-data-dir` option. Set `PWTEST_EXTENSION_USER_DATA_DIR` to the managed profile in the MCP environment so its relay opens `connect.html` in the already-running server Chrome. Treat this as a version-sensitive compatibility setting and retain the live `browser_tabs` probe after upgrades.
+Some offline internal hosts let the external CRX load, then mark it corrupted when Chrome cannot refresh Web Store content-verification metadata. Because this dedicated profile only installs checksum-pinned initializer assets, its launch contract uses `--extension-content-verification=none` and validates that switch on reuse. Do not apply that switch to a person's ordinary browsing profile.
+
+For the currently validated MCP build, extension mode does not honor the ordinary `--user-data-dir` option. Set `PWTEST_EXTENSION_USER_DATA_DIR` to the managed profile and pass `--executable-path /usr/bin/google-chrome`; otherwise a user-local Chrome for Testing binary can start headless with the same profile and replace the managed 9222 owner. Treat this as a version-sensitive compatibility setting, retain the live `browser_tabs` probe, and re-check Chrome ownership after the probe.
 
 Do not print the token. The Xpra password is a separate secret and is printed only by `--show-credential`.
 
@@ -107,6 +115,8 @@ Choose the installation method from the extension source:
 - **Chrome DevTools MCP extension tools:** use them only if the currently installed MCP exposes the needed tool and supports it for the active connection mode. Do not assume an extension operation available for a pipe-launched browser also works through `--browserUrl` attachment; inspect the current official capability or perform a harmless list/probe first.
 
 Do not download and silently install arbitrary CRX files. Verify the source, requested permissions, build output, and target profile before installation. Installing, force-installing, or removing an extension changes browser state and requires the user's authorization.
+
+The full server initializer includes a checksum-pinned byted-lane bundle from the maintained project source. It installs pinned Bun, a user systemd daemon, a Linux external CRX, an absolute-Bun CLI launcher, and the `byted-lane` plus `byted-integration-test` Skills. A new installation starts with lane disabled, no environments, and direct proxy mode. Repeated healthy initialization preserves the current valid lane configuration. Agents must create domain-limited Environment Profiles for business HTML/API hosts; never enable global header injection by default because it can add `x-tt-env` to CDN requests and trigger CORS preflight failures.
 
 ## Controller routing on the server
 

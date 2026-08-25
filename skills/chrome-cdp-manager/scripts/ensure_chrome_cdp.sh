@@ -18,6 +18,9 @@ STABILITY_PROBE_INTERVAL_SECONDS="${CHROME_CDP_STABILITY_PROBE_INTERVAL_SECONDS:
 FRESH_LAUNCH_ATTEMPTS="${CHROME_CDP_FRESH_LAUNCH_ATTEMPTS:-2}"
 RECYCLE_UNREACHABLE_MANAGED="${CHROME_CDP_RECYCLE_UNREACHABLE_MANAGED:-true}"
 LAUNCH_LOG="${STATE_DIR}/chrome-launch.log"
+REQUIRED_DISABLE_FEATURES="${CHROME_CDP_DISABLE_FEATURES:-LocalNetworkAccessChecks,PrivateNetworkAccessForNavigations}"
+LOAD_EXTENSIONS="${CHROME_CDP_LOAD_EXTENSIONS:-}"
+EXTENSION_CONTENT_VERIFICATION="${CHROME_CDP_EXTENSION_CONTENT_VERIFICATION:-none}"
 
 mkdir -p "${STATE_DIR}" "${PROFILE_DIR}"
 
@@ -107,6 +110,61 @@ for line in output.splitlines():
         sys.exit(0)
 
 sys.exit(1)
+PY
+}
+
+find_profile_port_pid() {
+  local port="$1"
+  python3 - "${PROFILE_DIR}" "${port}" <<'PY'
+import pathlib
+import subprocess
+import sys
+
+profile_dir = sys.argv[1]
+port = sys.argv[2]
+output = subprocess.check_output(["ps", "-axww", "-o", "pid=", "-o", "command="], text=True)
+for line in output.splitlines():
+    parts = line.strip().split(None, 1)
+    if len(parts) != 2:
+        continue
+    pid, command = parts
+    if "--type=" in command:
+        continue
+    if f"--user-data-dir={profile_dir}" in command and f"--remote-debugging-port={port}" in command:
+        print(pid)
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+managed_pid_has_required_args() {
+  local pid="$1"
+  python3 - "${pid}" "${REQUIRED_DISABLE_FEATURES}" "${LOAD_EXTENSIONS}" "${EXTENSION_CONTENT_VERIFICATION}" <<'PY'
+import pathlib
+import re
+import sys
+
+pid, required_features, required_extensions, content_verification = sys.argv[1:]
+try:
+    args = [part.decode(errors="replace") for part in pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
+except OSError:
+    import subprocess
+    command = subprocess.check_output(["ps", "-p", pid, "-o", "command="], text=True).strip()
+    args = command.split()
+
+disabled = set()
+loaded = set()
+command_text = " ".join(args)
+for match in re.finditer(r"(?:^|\s)--disable-features=([^\s]+)", command_text):
+    disabled.update(value for value in match.group(1).split(",") if value)
+for match in re.finditer(r"(?:^|\s)--load-extension=([^\s]+)", command_text):
+    loaded.update(value for value in match.group(1).split(",") if value)
+
+required_feature_set = {value for value in required_features.split(",") if value}
+required_extension_set = {value for value in required_extensions.split(",") if value}
+verification_arg = f"--extension-content-verification={content_verification}"
+verification_present = bool(re.search(rf"(?:^|\s){re.escape(verification_arg)}(?:\s|$)", command_text))
+sys.exit(0 if required_feature_set <= disabled and required_extension_set <= loaded and verification_present else 1)
 PY
 }
 
@@ -328,7 +386,7 @@ emit_result() {
   local chrome_path="$3"
   local pid="$4"
   local reused="$5"
-  python3 - "$port" "$ws_url" "${PROFILE_DIR}" "$reused" "$chrome_path" "$pid" <<'PY'
+  python3 - "$port" "$ws_url" "${PROFILE_DIR}" "$reused" "$chrome_path" "$pid" "${REQUIRED_DISABLE_FEATURES}" "${LOAD_EXTENSIONS}" "${EXTENSION_CONTENT_VERIFICATION}" <<'PY'
 import json
 import sys
 
@@ -338,6 +396,9 @@ profile_dir = sys.argv[3]
 reused = sys.argv[4].lower() == "true"
 chrome_path = sys.argv[5]
 pid = int(sys.argv[6])
+required_features = [value for value in sys.argv[7].split(",") if value]
+required_extensions = [value for value in sys.argv[8].split(",") if value]
+extension_content_verification = sys.argv[9]
 
 print(json.dumps({
     "port": port,
@@ -346,6 +407,12 @@ print(json.dumps({
     "reused": reused,
     "chrome_path": chrome_path,
     "pid": pid,
+    "launch_readiness": {
+        "required_disable_features": required_features,
+        "required_extensions": required_extensions,
+        "extension_content_verification": extension_content_verification,
+        "matched": True,
+    },
 }))
 PY
 }
@@ -358,7 +425,13 @@ launch_chrome() {
     --user-data-dir="${PROFILE_DIR}"
     --no-first-run
     --no-default-browser-check
+    --disable-features="${REQUIRED_DISABLE_FEATURES}"
+    --extension-content-verification="${EXTENSION_CONTENT_VERIFICATION}"
   )
+
+  if [[ -n "${LOAD_EXTENSIONS}" ]]; then
+    launch_args+=(--load-extension="${LOAD_EXTENSIONS}")
+  fi
 
   : > "${LAUNCH_LOG}"
 
@@ -480,6 +553,9 @@ reuse_managed_endpoint() {
   if [[ -z "${managed_pid}" ]]; then
     return 1
   fi
+  if ! managed_pid_has_required_args "${managed_pid}"; then
+    return 1
+  fi
 
   if [[ "${wait_for_ready}" == "true" ]]; then
     probe_payload="$(wait_for_cdp "${port}" || true)"
@@ -530,10 +606,14 @@ main() {
   existing_pids="$(profile_in_use 2>/dev/null || true)"
   if [[ -n "${existing_pids}" ]]; then
     local expected_pid=""
-    expected_pid="$(find_managed_pid "${PREFERRED_PORT}" 2>/dev/null || true)"
+    expected_pid="$(find_profile_port_pid "${PREFERRED_PORT}" 2>/dev/null || true)"
     if [[ -n "${expected_pid}" ]]; then
       if [[ "${RECYCLE_UNREACHABLE_MANAGED}" == "true" ]]; then
-        echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s; attempting a controlled restart." >&2
+        if managed_pid_has_required_args "${expected_pid}"; then
+          echo "managed Chrome pid ${expected_pid} uses profile ${PROFILE_DIR} and port ${PREFERRED_PORT}, but its CDP endpoint did not become reachable within ${STARTUP_TIMEOUT_SECONDS}s; attempting a controlled restart." >&2
+        else
+          echo "managed Chrome pid ${expected_pid} is missing required LNA or extension launch arguments; attempting a controlled restart." >&2
+        fi
         if ! terminate_profile_processes; then
           echo "failed to stop the unreachable managed Chrome processes for ${PROFILE_DIR}." >&2
           echo "inspect http://127.0.0.1:${PREFERRED_PORT}/json/version plus ${LAUNCH_LOG}." >&2

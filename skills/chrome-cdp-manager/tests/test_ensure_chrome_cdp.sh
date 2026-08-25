@@ -41,6 +41,7 @@ case_missing_state_recovers_live_endpoint() (
   acquire_lock() { :; }
   find_chrome_binary() { printf '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n'; }
   find_managed_pid() { [[ "$1" == "9222" ]] && printf '4242\n'; }
+  managed_pid_has_required_args() { return 0; }
   wait_for_cdp() { printf '{"browser":"Chrome/150","ws_url":"ws://127.0.0.1:9222/devtools/browser/recovered"}\n'; }
   profile_in_use() { printf '4242\n'; }
 
@@ -67,6 +68,7 @@ case_corrupt_session_falls_back_to_port_cache() (
   acquire_lock() { :; }
   find_chrome_binary() { printf '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n'; }
   find_managed_pid() { printf '5252\n'; }
+  managed_pid_has_required_args() { return 0; }
   probe_cdp() { printf '{"browser":"Chrome/150","ws_url":"ws://127.0.0.1:9222/devtools/browser/port-cache"}\n'; }
 
   local output
@@ -86,6 +88,7 @@ case_transient_probe_uses_ready_wait() (
   acquire_lock() { :; }
   find_chrome_binary() { printf '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n'; }
   find_managed_pid() { printf '6262\n'; }
+  managed_pid_has_required_args() { return 0; }
   probe_cdp() { return 1; }
   wait_for_cdp() {
     printf '{"browser":"Chrome/150","ws_url":"ws://127.0.0.1:9222/devtools/browser/after-wait"}\n'

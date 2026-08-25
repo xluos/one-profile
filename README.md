@@ -1,8 +1,10 @@
-# Chrome CDP Manager Skill Repo
+# Persistent Chrome and byted-lane Skills
 
-这个仓库当前只包含一个 skill：
+这个仓库包含三个协作 skill：
 
-- `chrome-cdp-manager`
+- `chrome-cdp-manager`：持久 Chrome、CDP、Xpra 和服务端初始化
+- `byted-lane`：泳道头、Environment Profile 与 Chrome 代理控制
+- `byted-integration-test`：PPE/BOE 联调和真实网络证据 playbook
 
 它的目标不是做一个“通用浏览器路由器”，而是为持久 Chrome 选择正确控制面，并稳定管理可复用的 CDP 实例，让后续的 Agent/自动化流程能够：
 
@@ -18,6 +20,8 @@
 
 ```text
 skills/chrome-cdp-manager/
+skills/byted-lane/
+skills/byted-integration-test/
 ```
 
 ## 适合的场景
@@ -30,7 +34,9 @@ skills/chrome-cdp-manager/
 
 控制面按目标选择：本机真实登录态和日常交互优先 Codex/ChatGPT Chrome 扩展；请求级调试、性能和内存分析使用 Chrome DevTools MCP；服务端多步骤流程、断言和回归使用带 token 的 Playwright MCP Bridge。
 
-服务端统一由 `scripts/server_browser.py` 检测和初始化。遇到登录、MFA、验证码或定位不到元素时，Skill 自动启动/复用 Xpra，并直接给出 `http://<server-ip>:14500/` 和密码；没有 local/tunnel 选择。外部 14500 由标准 HTTP/1.1/WebSocket 网关承接，Xpra 本体只在 `127.0.0.1:14501`；脚本拒绝在公网地址启动这种无 TLS 模式，CDP 也始终保持 `127.0.0.1:9222`。脚本还会自动安装官方 Playwright MCP Bridge、获取扩展生成的 token、配置对应 MCP，并通过真实 `browser_tabs` 调用验证。
+服务端统一由 `scripts/server_browser.py` 检测和初始化。遇到登录、MFA、验证码或定位不到元素时，Skill 自动启动/复用 Xpra，并直接给出 `http://<server-ip>:14500/` 和密码；没有 local/tunnel 选择。外部 14500 由标准 HTTP/1.1/WebSocket 网关承接，Xpra 本体只在 `127.0.0.1:14501`；脚本拒绝在公网地址启动这种无 TLS 模式，CDP 也始终保持 `127.0.0.1:9222`。脚本会固化并校验 Chrome 151/152 的 LNA 兼容参数，同时安装官方 Playwright MCP Bridge，以及 checksum 固定的 byted-lane Bun runtime、用户级 daemon、Chrome 扩展和联调 Skills；byted-lane 默认保持关闭，后续按业务域名精确配置。
+
+服务端巡检使用 `scripts/ensure_server_browser.py`：默认只读并输出稳定 issue code；授权后使用 `--repair --apply` 自动走同一个幂等初始化器。健康环境重复执行不会重装工具、重启 Chrome 或修改现有有效泳道。
 
 每次服务端 Chrome 启动或 Xpra 被确保可用时，脚本都会把可见 Chrome 主窗口移动到虚拟屏幕左上角并调整为 `100% × 100%`，再把实时屏幕和窗口尺寸写入 JSON 输出。
 
