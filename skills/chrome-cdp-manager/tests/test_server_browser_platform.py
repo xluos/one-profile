@@ -53,6 +53,75 @@ class XpraPlatformTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "xpra-html5"):
                 server_browser.apt_install(["xpra-server", "xpra-html5"])
 
+    def test_xpra_client_is_an_explicit_system_dependency(self) -> None:
+        self.assertIn("xpra-client", server_browser.XPRA_SYSTEM_PACKAGES)
+
+    def test_xpra_client_state_requires_package_and_importable_module(self) -> None:
+        imported = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.object(server_browser.sys, "platform", "linux"), mock.patch.object(
+            server_browser, "executable", side_effect=lambda name: f"/usr/bin/{name}"
+        ), mock.patch.object(server_browser, "package_installed", return_value=True), mock.patch.object(
+            server_browser, "run", return_value=imported
+        ):
+            state = server_browser.xpra_client_state()
+        self.assertTrue(state["package_installed"])
+        self.assertTrue(state["module_importable"])
+
+        missing = SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="ModuleNotFoundError: No module named 'xpra.client'\n",
+        )
+        with mock.patch.object(server_browser.sys, "platform", "linux"), mock.patch.object(
+            server_browser, "executable", side_effect=lambda name: f"/usr/bin/{name}"
+        ), mock.patch.object(server_browser, "package_installed", return_value=False), mock.patch.object(
+            server_browser, "run", return_value=missing
+        ):
+            state = server_browser.xpra_client_state()
+        self.assertFalse(state["package_installed"])
+        self.assertFalse(state["module_importable"])
+        self.assertIn("xpra.client", state["error"])
+
+    def test_system_package_bootstrap_reports_new_xpra_client(self) -> None:
+        before = {"package_installed": False, "module_importable": False, "error": "missing"}
+        after = {"package_installed": True, "module_importable": True, "error": None}
+        with mock.patch.object(server_browser.sys, "platform", "linux"), mock.patch.object(
+            server_browser, "executable", side_effect=lambda name: "/usr/bin/apt-get" if name == "apt-get" else None
+        ), mock.patch.object(server_browser, "xpra_client_state", side_effect=[before, after]), mock.patch.object(
+            server_browser, "ensure_xpra_stable_repo", return_value=[]
+        ), mock.patch.object(server_browser, "run"), mock.patch.object(
+            server_browser, "apt_install", return_value=None
+        ) as apt_install, mock.patch.object(
+            server_browser, "ensure_chinese_font", return_value={"available": True}
+        ), mock.patch.object(
+            server_browser, "system_chrome_path", return_value="/usr/bin/google-chrome"
+        ):
+            result = server_browser.ensure_system_packages()
+
+        self.assertIn("xpra-client", apt_install.call_args.args[0])
+        self.assertTrue(result["xpra_client"]["installed"])
+
+    def test_full_initialization_restarts_xpra_after_client_install(self) -> None:
+        args = SimpleNamespace(show_credential=False)
+        system = {"xpra_client": {"installed": True}}
+        with mock.patch.object(server_browser, "ensure_permissions"), mock.patch.object(
+            server_browser, "ensure_system_packages", return_value=system
+        ), mock.patch.object(server_browser, "ensure_user_tools"), mock.patch.object(
+            server_browser, "install_byted_lane_runtime", return_value={}
+        ), mock.patch.object(server_browser, "ensure_chrome", return_value={}), mock.patch.object(
+            server_browser, "install_bridge", return_value={}
+        ), mock.patch.object(server_browser, "configure_codex", return_value={}), mock.patch.object(
+            server_browser, "managed_xpra_process", return_value=(1234, ["xpra"])
+        ), mock.patch.object(server_browser, "stop_managed_xpra") as stop_xpra, mock.patch.object(
+            server_browser, "ensure_xpra", return_value={}
+        ), mock.patch.object(server_browser, "verify_bridge", return_value={}), mock.patch.object(
+            server_browser, "verify_byted_lane", return_value={}
+        ):
+            result = server_browser.initialize_full(args)
+
+        stop_xpra.assert_called_once_with()
+        self.assertTrue(result["xpra"]["restarted_for_client_install"])
+
     def test_bundled_bridge_asset_is_valid_and_extractable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_dir = pathlib.Path(directory)
@@ -336,7 +405,11 @@ class XpraPlatformTests(unittest.TestCase):
                 server_browser, "executable", side_effect=lambda name: f"/usr/bin/{name}"
             ), mock.patch.object(server_browser, "managed_xpra_is_http", return_value=True), mock.patch.object(
                 server_browser, "managed_gateway_is_ready", return_value=True
-            ), mock.patch.object(server_browser, "file_mode", return_value="0o600"), mock.patch.object(
+            ), mock.patch.object(
+                server_browser,
+                "xpra_client_state",
+                return_value={"package_installed": True, "module_importable": True, "error": None},
+            ) as xpra_client_probe, mock.patch.object(server_browser, "file_mode", return_value="0o600"), mock.patch.object(
                 server_browser, "bridge_directory_valid", return_value=True
             ), mock.patch.object(server_browser, "bridge_profile_state", return_value={"version": server_browser.BRIDGE_VERSION}), mock.patch.object(
                 server_browser, "run", side_effect=fake_run
@@ -344,10 +417,21 @@ class XpraPlatformTests(unittest.TestCase):
                 server_browser, "codex_mcp_detect_state", return_value={"ok": True}
             ):
                 health = server_browser.environment_health()
+                xpra_client_probe.return_value = {
+                    "package_installed": False,
+                    "module_importable": False,
+                    "error": "ModuleNotFoundError: No module named 'xpra.client'",
+                }
+                missing_client_health = server_browser.environment_health()
 
         self.assertTrue(health["ok"])
         self.assertFalse(health["checks"]["byted_lane"]["safe_default"])
         self.assertEqual(health["issues"], [])
+        self.assertFalse(missing_client_health["ok"])
+        self.assertEqual(
+            [item["code"] for item in missing_client_health["issues"]],
+            ["xpra_client_unavailable"],
+        )
 
     def test_initialize_is_a_noop_when_environment_is_healthy(self) -> None:
         healthy = {"ok": True, "repair_required": False, "issues": [], "checks": {}}
@@ -377,6 +461,10 @@ class XpraPlatformTests(unittest.TestCase):
                 server_browser, "executable", return_value=None
             ), mock.patch.object(server_browser, "managed_xpra_is_http", return_value=False), mock.patch.object(
                 server_browser, "managed_gateway_is_ready", return_value=False
+            ), mock.patch.object(
+                server_browser,
+                "xpra_client_state",
+                return_value={"package_installed": False, "module_importable": False, "error": "missing"},
             ), mock.patch.object(server_browser, "file_mode", return_value=None), mock.patch.object(
                 server_browser, "bridge_directory_valid", return_value=False
             ), mock.patch.object(server_browser, "bridge_profile_state", return_value=None), mock.patch.object(
@@ -394,6 +482,7 @@ class XpraPlatformTests(unittest.TestCase):
             "managed_chrome_invalid",
             "network_service_unready",
             "xpra_unavailable",
+            "xpra_client_unavailable",
             "bridge_unavailable",
             "toolchain_unavailable",
             "byted_lane_runtime_unavailable",

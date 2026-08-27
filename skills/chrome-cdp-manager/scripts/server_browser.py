@@ -68,6 +68,12 @@ Components: main
 Signed-By: /usr/share/keyrings/xpra.asc
 Architectures: amd64 arm64
 """
+XPRA_SYSTEM_PACKAGES = (
+    "xpra-server", "xpra-client", "xpra-x11", "xpra-html5",
+    "gir1.2-gtk-3.0", "python3-gi",
+    "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
+    "curl", "ca-certificates", "openssl", "fontconfig",
+)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -440,6 +446,28 @@ def package_installed(name: str) -> bool:
     return result.returncode == 0 and result.stdout.startswith("ii")
 
 
+def xpra_client_state() -> dict[str, Any]:
+    package_ready = (
+        sys.platform == "linux"
+        and executable("dpkg-query") is not None
+        and package_installed("xpra-client")
+    )
+    python = executable("python3")
+    if not python:
+        return {
+            "package_installed": package_ready,
+            "module_importable": False,
+            "error": "python3 is unavailable",
+        }
+    probe = run([python, "-c", "import xpra.client"], check=False, env=command_env())
+    detail = (probe.stderr or probe.stdout).strip().splitlines()
+    return {
+        "package_installed": package_ready,
+        "module_importable": probe.returncode == 0,
+        "error": None if probe.returncode == 0 else (detail[-1] if detail else "xpra.client import failed"),
+    }
+
+
 def apt_install(
     packages: list[str], *, verify_packages: list[str] | None = None, no_recommends: bool = False
 ) -> str | None:
@@ -528,15 +556,24 @@ def ensure_chinese_font() -> dict[str, Any]:
 def ensure_system_packages() -> dict[str, Any]:
     if sys.platform != "linux" or not executable("apt-get"):
         raise RuntimeError("automatic initialization currently supports Debian-family Linux only")
+    xpra_client_before = xpra_client_state()
     warnings = ensure_xpra_stable_repo()
     run(["sudo", "apt-get", "update"])
-    warning = apt_install([
-        "xpra-server", "xpra-x11", "xpra-html5", "gir1.2-gtk-3.0", "python3-gi",
-        "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
-        "curl", "ca-certificates", "openssl", "fontconfig",
-    ], no_recommends=True)
+    warning = apt_install(list(XPRA_SYSTEM_PACKAGES), no_recommends=True)
     if warning:
         warnings.append(warning)
+    xpra_client_after = xpra_client_state()
+    if not (
+        xpra_client_after["package_installed"]
+        and xpra_client_after["module_importable"]
+    ):
+        raise RuntimeError(
+            "xpra-client was installed, but the xpra.client Python module is still unavailable"
+        )
+    xpra_client_after["installed"] = (
+        not xpra_client_before["package_installed"]
+        and xpra_client_after["package_installed"]
+    )
     systemctl = executable("systemctl")
     if systemctl:
         disabled = run(["sudo", systemctl, "disable", "--now", "xpra-server.socket"], check=False)
@@ -545,7 +582,11 @@ def ensure_system_packages() -> dict[str, Any]:
             raise RuntimeError(f"failed to disable packaged xpra-server.socket on port {XPRA_PORT}: {detail}")
     chinese_font = ensure_chinese_font()
     if system_chrome_path():
-        return {"chinese_font": chinese_font, "warnings": warnings}
+        return {
+            "chinese_font": chinese_font,
+            "xpra_client": xpra_client_after,
+            "warnings": warnings,
+        }
     with tempfile.TemporaryDirectory(prefix="chrome-install-") as directory:
         package = pathlib.Path(directory) / "google-chrome-stable_current_amd64.deb"
         urllib.request.urlretrieve(
@@ -557,7 +598,11 @@ def ensure_system_packages() -> dict[str, Any]:
             warnings.append(warning)
     if not system_chrome_path():
         raise RuntimeError("google-chrome-stable was installed, but no executable system Chrome was found")
-    return {"chinese_font": chinese_font, "warnings": warnings}
+    return {
+        "chinese_font": chinese_font,
+        "xpra_client": xpra_client_after,
+        "warnings": warnings,
+    }
 
 
 def ensure_user_tools() -> None:
@@ -1494,6 +1539,7 @@ def environment_health() -> dict[str, Any]:
 
     xpra_checks = {
         "binary": executable("xpra") is not None,
+        "client": xpra_client_state(),
         "external_port": port_open("127.0.0.1", XPRA_PORT),
         "backend_port": port_open("127.0.0.1", XPRA_BACKEND_PORT),
         "managed_backend": managed_xpra_is_http(),
@@ -1509,6 +1555,15 @@ def environment_health() -> dict[str, Any]:
         and xpra_checks["password_mode"] == "0o600"
     ):
         issue("xpra_unavailable", "ui", "the authenticated Xpra backend/gateway contract is incomplete")
+    if not (
+        xpra_checks["client"]["package_installed"]
+        and xpra_checks["client"]["module_importable"]
+    ):
+        issue(
+            "xpra_client_unavailable",
+            "ui",
+            "the xpra-client package or required xpra.client Python module is unavailable",
+        )
 
     bridge_state = bridge_profile_state()
     bridge_token = STATE_DIR / "playwright-mcp-extension-token"
@@ -1617,7 +1672,12 @@ def initialize_full(args: argparse.Namespace) -> dict[str, Any]:
     chrome = ensure_chrome()
     bridge = install_bridge()
     codex = configure_codex()
+    xpra_restarted_for_client = False
+    if system["xpra_client"]["installed"] and managed_xpra_process():
+        stop_managed_xpra()
+        xpra_restarted_for_client = True
     xpra = ensure_xpra(args.show_credential)
+    xpra["restarted_for_client_install"] = xpra_restarted_for_client
     bridge_probe = verify_bridge()
     byted_lane_probe = verify_byted_lane()
     return {

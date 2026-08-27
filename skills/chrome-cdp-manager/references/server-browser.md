@@ -64,12 +64,12 @@ scripts/server_browser.py configure-codex --apply
 scripts/server_browser.py bridge --verify
 ```
 
-The package bootstrap includes `x11-utils` because the display readiness probe uses `xdpyinfo`, plus `gir1.2-gtk-3.0` and `python3-gi` because Xpra's X11 shadow backend imports GDK at runtime. Installing Xvfb and xdotool alone is insufficient.
+The package bootstrap explicitly includes `xpra-client` because the authenticated HTML5 connection path requires the `xpra.client` Python component even though the managed host launches an Xpra shadow server. It also includes `x11-utils` because the display readiness probe uses `xdpyinfo`, plus `gir1.2-gtk-3.0` and `python3-gi` because Xpra's X11 shadow backend imports GDK at runtime. Installing only the server, HTML5 assets, Xvfb, and xdotool is insufficient. Health requires both the `xpra-client` package and a successful `import xpra.client` probe so a listening backend cannot be mistaken for a usable browser session. When repair newly installs this component, it explicitly restarts the managed Xpra backend before rechecking health. Healthy repeated initialization remains a no-op; an unhealthy full repair may independently restart Chrome while reinstalling the managed Bridge.
 The official Xpra package may enable `xpra-server.socket` on `14500`; initialization disables that packaged socket so the authenticated managed HTTP gateway can own the external port without colliding with a root socket-activated Xpra service.
 
 `detect`, `health`, and the default `ensure_server_browser.py` invocation are read-only. Repair requires both `--repair` and `--apply`. A healthy `init --apply` or repair is a no-op; an unhealthy repair runs the full initializer and repeats the health check before reporting success. Every command emits JSON; callers should consume structured fields instead of scraping logs.
 
-Health issue codes cover missing system Chrome, unreachable or invalid managed CDP, a Network Service without the LNA flags, Xpra/gateway failures, incomplete Bridge assets/token, toolchain or non-interactive CLI failures, byted-lane runtime/daemon/extension failures, missing Skills, and invalid Codex MCP binding. A valid active business lane is not a health failure: preserve it when the extension has applied the current revision.
+Health issue codes cover missing system Chrome, unreachable or invalid managed CDP, a Network Service without the LNA flags, Xpra/gateway failures, a missing `xpra-client` package or Python module (`xpra_client_unavailable`), incomplete Bridge assets/token, toolchain or non-interactive CLI failures, byted-lane runtime/daemon/extension failures, missing Skills, and invalid Codex MCP binding. A valid active business lane is not a health failure: preserve it when the extension has applied the current revision.
 
 ## Human login and recovery
 
