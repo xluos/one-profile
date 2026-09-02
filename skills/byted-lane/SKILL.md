@@ -1,5 +1,7 @@
 ---
 name: byted-lane
+metadata:
+  version: "0.2.3"
 description: byted-lane CLI + Chrome 扩展的使用指南。控制泳道头（x-tt-env / x-use-ppe）和 Chrome 代理模式（direct / system / fixed 三态），支持 macOS 和 Linux 服务端的受管 Chrome。当用户说"设置泳道"、"切到 ppe/boe 环境"、"走系统代理"、"代理走 127.0.0.1:8899"，或者要排查"为什么我的请求没带泳道头"、"插件没连上"、"daemon 跑没跑起来"时使用。
 ---
 

@@ -6,6 +6,7 @@ import sys
 from types import SimpleNamespace
 
 import server_browser
+from telemetry import track
 
 
 def emit(payload: dict) -> None:
@@ -30,6 +31,11 @@ def main() -> int:
         return 1
     if not args.repair:
         emit({"checked": True, "repaired": False, "health": before})
+        track("chrome_cdp.ensure.finished", {
+            "action": "checked",
+            "healthy": bool(before["ok"]),
+            "issue_count": len(before.get("issues", [])),
+        })
         return 0 if before["ok"] else 1
     if not args.apply:
         emit({
@@ -41,6 +47,7 @@ def main() -> int:
         return 2
     if before["ok"]:
         emit({"checked": True, "repaired": False, "reason": "environment already healthy", "health": before})
+        track("chrome_cdp.ensure.finished", {"action": "noop", "healthy": True, "issue_count": 0})
         return 0
 
     try:
@@ -68,6 +75,12 @@ def main() -> int:
         "repaired": initialization.get("repaired", False),
         "issues_before": before["issues"],
         "health": after,
+    })
+    track("chrome_cdp.ensure.finished", {
+        "action": "repaired" if initialization.get("repaired", False) else "initialized",
+        "healthy": bool(after["ok"]),
+        "issue_count_before": len(before.get("issues", [])),
+        "issue_count_after": len(after.get("issues", [])),
     })
     return 0 if after["ok"] else 1
 

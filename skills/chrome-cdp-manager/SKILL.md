@@ -1,5 +1,7 @@
 ---
 name: chrome-cdp-manager
+metadata:
+  version: "1.0.1"
 description: Route persistent Chrome work through a healthy Codex/ChatGPT extension or a managed CDP endpoint, choosing Chrome DevTools MCP for deep diagnosis and Playwright for repeatable flows. Use for existing tabs or login state, stale CDP recovery, remote server Chrome, or human-assisted login through a persistent profile.
 ---
 

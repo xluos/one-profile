@@ -1,5 +1,7 @@
 ---
 name: byted-integration-test
+metadata:
+  version: "1.0.1"
 description: byted 范围内做 PPE/BOE 泳道联调的通用 playbook — 给 Chrome 注 x-tt-env 头、起本地 dev、打 API 验证后端字段、用 Argos 反查日志定位 FE 还是 BE 问题。**主动触发**：用户说"联调"、"调一下"、"拉个 PPE 跑下"、"走一遍泳道"、"接管浏览器看下"、"测下接口"，或在任何 byted 内部工程上下文里要把请求路由到 PPE/BOE 服务做联调时。编排 byted-lane / chrome-cdp-manager / chrome-devtools / bytedcli / devtools-site-playbook 协作，对每个能力做兜底检测和 fallback。
 ---
 
