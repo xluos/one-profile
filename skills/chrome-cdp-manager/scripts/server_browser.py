@@ -9,13 +9,11 @@ import os
 import pathlib
 import re
 import secrets
-import shlex
 import shutil
 import signal
 import socket
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import urllib.request
@@ -40,25 +38,6 @@ BRIDGE_DIR = STATE_DIR / f"playwright-mcp-bridge-{BRIDGE_VERSION}"
 BRIDGE_POLICY = pathlib.Path("/etc/opt/chrome/policies/managed/playwright-mcp-bridge.json")
 BRIDGE_EXTERNAL_CRX = pathlib.Path(f"/opt/google/chrome/extensions/playwright-mcp-bridge-{BRIDGE_VERSION}.crx")
 BRIDGE_EXTERNAL_CONFIG = pathlib.Path(f"/opt/google/chrome/extensions/{BRIDGE_ID}.json")
-BYTED_LANE_VERSION = "0.1.0"
-BUN_VERSION = "1.2.22"
-BYTED_LANE_BUNDLE_SHA256 = "fc45f8fc3847ee75a4b7a4a48666ee930bfbe88fbc02d1722137a249eb1af645"
-BYTED_LANE_BUNDLE = SCRIPT_DIR.parent / "assets" / f"byted-lane-bundle-{BYTED_LANE_VERSION}.tar.gz"
-BYTED_LANE_ROOT = STATE_DIR / f"byted-lane-bundle-{BYTED_LANE_VERSION}"
-BYTED_LANE_RUNTIME = BYTED_LANE_ROOT / "runtime"
-BYTED_LANE_EXTENSION = BYTED_LANE_RUNTIME / "extension"
-BYTED_LANE_CRX = STATE_DIR / f"byted-lane-{BYTED_LANE_VERSION}.crx"
-BYTED_LANE_PEM = STATE_DIR / "byted-lane-extension.pem"
-BYTED_LANE_EXTENSION_ID_FILE = STATE_DIR / "byted-lane-extension-id"
-BYTED_LANE_EXTERNAL_CRX = pathlib.Path(f"/opt/google/chrome/extensions/byted-lane-{BYTED_LANE_VERSION}.crx")
-BYTED_LANE_CONFIG = pathlib.Path("~/.byted-lane/config.json").expanduser()
-BYTED_LANE_UNIT = pathlib.Path("~/.config/systemd/user/byted-lane.service").expanduser()
-BYTED_LANE_SKILL_NAMES = ("byted-lane", "byted-integration-test")
-BYTED_LANE_DEFAULT_CONFIG = {
-    "lane": {"enabled": False, "headers": {}},
-    "environments": [],
-    "proxy": {"mode": "direct"},
-}
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 XPRA_KEY_FINGERPRINT = "B4993B57323148E37977E5D873254CAD17978FAF"
 XPRA_BOOKWORM_SOURCE = """Types: deb
@@ -72,7 +51,7 @@ XPRA_SYSTEM_PACKAGES = (
     "xpra-server", "xpra-client", "xpra-x11", "xpra-html5",
     "gir1.2-gtk-3.0", "python3-gi",
     "xvfb", "openbox", "x11-utils", "xdotool", "xclip",
-    "curl", "ca-certificates", "openssl", "fontconfig",
+    "curl", "ca-certificates", "fontconfig",
 )
 
 
@@ -145,76 +124,6 @@ def prepare_bridge_extension() -> pathlib.Path:
     return BRIDGE_DIR
 
 
-def byted_lane_bundle_valid(path: pathlib.Path) -> bool:
-    required = (
-        path / "runtime" / "cli" / "index.ts",
-        path / "runtime" / "daemon" / "index.ts",
-        path / "runtime" / "shared" / "protocol.ts",
-        path / "runtime" / "extension" / "dist" / "background.js",
-        path / "skills" / "byted-lane" / "SKILL.md",
-        path / "skills" / "byted-integration-test" / "SKILL.md",
-    )
-    try:
-        manifest = json.loads((path / "runtime" / "extension" / "manifest.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    try:
-        installed_digest = (path / ".bundle-sha256").read_text().strip()
-    except OSError:
-        return False
-    return (
-        all(item.is_file() for item in required)
-        and manifest.get("name") == "byted-lane"
-        and installed_digest == BYTED_LANE_BUNDLE_SHA256
-    )
-
-
-def byted_lane_asset_valid() -> bool:
-    return (
-        BYTED_LANE_BUNDLE.is_file()
-        and hashlib.sha256(BYTED_LANE_BUNDLE.read_bytes()).hexdigest() == BYTED_LANE_BUNDLE_SHA256
-    )
-
-
-def byted_lane_extension_id() -> str | None:
-    try:
-        value = BYTED_LANE_EXTENSION_ID_FILE.read_text().strip()
-    except OSError:
-        return None
-    return value if re.fullmatch(r"[a-p]{32}", value) else None
-
-
-def prepare_byted_lane_bundle() -> pathlib.Path:
-    if byted_lane_bundle_valid(BYTED_LANE_ROOT):
-        return BYTED_LANE_ROOT
-    if not byted_lane_asset_valid():
-        raise RuntimeError("bundled byted-lane asset is missing or its checksum does not match")
-    temporary_parent = pathlib.Path(tempfile.mkdtemp(prefix=".byted-lane-", dir=STATE_DIR))
-    try:
-        with tarfile.open(BYTED_LANE_BUNDLE, "r:gz") as archive:
-            root = temporary_parent.resolve()
-            for member in archive.getmembers():
-                target = (temporary_parent / member.name).resolve()
-                if target != root and root not in target.parents:
-                    raise RuntimeError(f"unsafe path in bundled byted-lane asset: {member.name}")
-                if member.issym() or member.islnk():
-                    raise RuntimeError(f"links are not allowed in bundled byted-lane asset: {member.name}")
-            archive.extractall(temporary_parent)
-        extracted = temporary_parent / BYTED_LANE_ROOT.name
-        if not (extracted / "runtime" / "extension" / "manifest.json").is_file():
-            raise RuntimeError("bundled byted-lane manifest validation failed")
-        (extracted / ".bundle-sha256").write_text(BYTED_LANE_BUNDLE_SHA256 + "\n")
-        if not byted_lane_bundle_valid(extracted):
-            raise RuntimeError("bundled byted-lane content validation failed")
-        if BYTED_LANE_ROOT.exists():
-            shutil.rmtree(BYTED_LANE_ROOT)
-        extracted.replace(BYTED_LANE_ROOT)
-    finally:
-        if temporary_parent.exists():
-            shutil.rmtree(temporary_parent)
-    return BYTED_LANE_ROOT
-
-
 def executable(name: str) -> str | None:
     return shutil.which(name, path=command_env()["PATH"])
 
@@ -273,64 +182,6 @@ def chinese_font_state() -> dict[str, Any]:
     }
 
 
-def byted_lane_status() -> dict[str, Any] | None:
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:38999/status", timeout=1) as response:
-            payload = json.load(response)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def byted_lane_config_is_safe_default(config: Any) -> bool:
-    if not isinstance(config, dict):
-        return False
-    lane = config.get("lane")
-    proxy = config.get("proxy")
-    return (
-        isinstance(lane, dict)
-        and lane.get("enabled") is False
-        and lane.get("headers") == {}
-        and config.get("environments") == []
-        and isinstance(proxy, dict)
-        and proxy.get("mode") == "direct"
-        and not proxy.get("server")
-    )
-
-
-def byted_lane_detect_state() -> dict[str, Any]:
-    status = byted_lane_status()
-    skill_root = pathlib.Path("~/.agents/skills").expanduser()
-    config = None
-    if BYTED_LANE_CONFIG.exists():
-        try:
-            config = json.loads(BYTED_LANE_CONFIG.read_text())
-        except (OSError, json.JSONDecodeError):
-            config = {"valid": False}
-    return {
-        "version": BYTED_LANE_VERSION,
-        "bundle_asset_valid": byted_lane_asset_valid(),
-        "runtime_ready": byted_lane_bundle_valid(BYTED_LANE_ROOT),
-        "runtime_path": str(BYTED_LANE_RUNTIME),
-        "extension_path": str(BYTED_LANE_EXTENSION),
-        "extension_id": byted_lane_extension_id(),
-        "external_crx": str(BYTED_LANE_EXTERNAL_CRX),
-        "cli_path": str(LOCAL_BIN / "byted-lane"),
-        "cli_installed": (LOCAL_BIN / "byted-lane").exists(),
-        "systemd_unit": str(BYTED_LANE_UNIT),
-        "systemd_unit_installed": BYTED_LANE_UNIT.is_file(),
-        "daemon": status,
-        "config": config,
-        "safe_default": byted_lane_config_is_safe_default(config),
-        "skills": {
-            name: (skill_root / name / "SKILL.md").is_file()
-            for name in BYTED_LANE_SKILL_NAMES
-        },
-    }
-
-
 def codex_mcp_detect_state() -> dict[str, Any]:
     try:
         verify = run(
@@ -351,7 +202,7 @@ def detect() -> dict[str, Any]:
     managed_chrome_path = system_chrome_path()
     programs = {
         name: {"path": executable(name), "version": version(name)}
-        for name in ("xpra", "node", "bun", "byted-lane", "codex", "chrome-devtools-mcp", "playwright-mcp")
+        for name in ("xpra", "node", "codex", "chrome-devtools-mcp", "playwright-mcp")
     }
     programs["google-chrome"] = {
         "path": managed_chrome_path,
@@ -387,7 +238,6 @@ def detect() -> dict[str, Any]:
             "token_mode": file_mode(STATE_DIR / "playwright-mcp-extension-token"),
         },
         "local_network_access": managed_chrome_launch_state(),
-        "byted_lane": byted_lane_detect_state(),
         "codex_mcp": mcp_config,
     }
 
@@ -616,185 +466,8 @@ def ensure_user_tools() -> None:
     run([str(LOCAL_BIN / "n"), "lts"], env=env)
     run([
         str(LOCAL_BIN / "npm"), "install", "-g", "--prefix", str(LOCAL_BIN.parent),
-        f"bun@{BUN_VERSION}", "@openai/codex@latest", "chrome-devtools-mcp@latest", "@playwright/mcp@latest",
+        "@openai/codex@latest", "chrome-devtools-mcp@latest", "@playwright/mcp@latest",
     ], env=command_env())
-    bun = LOCAL_BIN / "bun"
-    if not bun.is_file():
-        raise RuntimeError("the pinned Bun runtime was installed, but ~/.local/bin/bun is missing")
-    result = run([str(bun), "--version"], env=command_env())
-    if result.stdout.strip() != BUN_VERSION:
-        raise RuntimeError(f"unexpected Bun version after installation: {result.stdout.strip()}")
-
-
-def install_byted_lane_skills(bundle_root: pathlib.Path) -> dict[str, str]:
-    target_root = pathlib.Path("~/.agents/skills").expanduser()
-    target_root.mkdir(parents=True, exist_ok=True)
-    installed: dict[str, str] = {}
-    for name in BYTED_LANE_SKILL_NAMES:
-        source = bundle_root / "skills" / name
-        target = target_root / name
-        if target.is_symlink():
-            target.unlink()
-        shutil.copytree(source, target, dirs_exist_ok=True)
-        installed[name] = str(target)
-    return installed
-
-
-def install_byted_lane_cli_launcher(cli_entry: pathlib.Path) -> pathlib.Path:
-    launcher = LOCAL_BIN / "byted-lane"
-    if launcher.exists() or launcher.is_symlink():
-        launcher.unlink()
-    launcher.write_text(
-        "#!/bin/sh\n"
-        f"exec {shlex.quote(str(LOCAL_BIN / 'bun'))} run {shlex.quote(str(cli_entry))} \"$@\"\n"
-    )
-    launcher.chmod(0o755)
-    return launcher
-
-
-def derive_chrome_extension_id(pem_path: pathlib.Path) -> str:
-    result = subprocess.run(
-        ["openssl", "rsa", "-in", str(pem_path), "-pubout", "-outform", "DER"],
-        check=True,
-        capture_output=True,
-    )
-    digest = hashlib.sha256(result.stdout).hexdigest()[:32]
-    return "".join(chr(ord("a") + int(value, 16)) for value in digest)
-
-
-def install_byted_lane_extension() -> dict[str, Any]:
-    chrome = system_chrome_path()
-    if not chrome:
-        raise RuntimeError("system Google Chrome is required to pack the byted-lane extension")
-    with tempfile.TemporaryDirectory(prefix="byted-lane-pack-") as directory:
-        root = pathlib.Path(directory)
-        source = root / "byted-lane"
-        shutil.copytree(BYTED_LANE_EXTENSION, source)
-        command = [chrome, f"--pack-extension={source}"]
-        if BYTED_LANE_PEM.is_file():
-            command.append(f"--pack-extension-key={BYTED_LANE_PEM}")
-        result = run(command, check=False, env=command_env())
-        generated_crx = root / "byted-lane.crx"
-        generated_pem = root / "byted-lane.pem"
-        if result.returncode != 0 or not generated_crx.is_file():
-            detail = (result.stdout + result.stderr).strip()
-            raise RuntimeError(f"Chrome failed to pack the bundled byted-lane extension: {detail}")
-        shutil.copy2(generated_crx, BYTED_LANE_CRX)
-        BYTED_LANE_CRX.chmod(0o600)
-        if not BYTED_LANE_PEM.is_file():
-            if not generated_pem.is_file():
-                raise RuntimeError("Chrome packed byted-lane without producing its first-install key")
-            shutil.copy2(generated_pem, BYTED_LANE_PEM)
-            BYTED_LANE_PEM.chmod(0o600)
-
-    extension_id = derive_chrome_extension_id(BYTED_LANE_PEM)
-    previous_id = byted_lane_extension_id()
-    if previous_id and previous_id != extension_id:
-        raise RuntimeError("the persisted byted-lane extension key changed unexpectedly")
-    BYTED_LANE_EXTENSION_ID_FILE.write_text(extension_id + "\n")
-    BYTED_LANE_EXTENSION_ID_FILE.chmod(0o600)
-    external_config = STATE_DIR / "byted-lane-external.json"
-    external_config.write_text(json.dumps({
-        "external_crx": str(BYTED_LANE_EXTERNAL_CRX),
-        "external_version": BYTED_LANE_VERSION,
-    }, indent=2) + "\n")
-    external_config.chmod(0o600)
-    external_target = pathlib.Path(f"/opt/google/chrome/extensions/{extension_id}.json")
-    run(["sudo", "install", "-D", "-m", "0644", str(BYTED_LANE_CRX), str(BYTED_LANE_EXTERNAL_CRX)])
-    run(["sudo", "install", "-D", "-m", "0644", str(external_config), str(external_target)])
-    return {
-        "extension_id": extension_id,
-        "source": "checksum-bundled-source-packed-as-linux-external-crx",
-        "crx": str(BYTED_LANE_EXTERNAL_CRX),
-        "external_config": str(external_target),
-    }
-
-
-def install_byted_lane_runtime() -> dict[str, Any]:
-    bundle_root = prepare_byted_lane_bundle()
-    extension = install_byted_lane_extension()
-    cli_entry = BYTED_LANE_RUNTIME / "cli" / "index.ts"
-    cli_entry.chmod(0o755)
-    cli_link = install_byted_lane_cli_launcher(cli_entry)
-
-    config_preexisting = BYTED_LANE_CONFIG.exists()
-    if not config_preexisting:
-        BYTED_LANE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        BYTED_LANE_CONFIG.parent.chmod(0o700)
-        BYTED_LANE_CONFIG.write_text(json.dumps(BYTED_LANE_DEFAULT_CONFIG, indent=2) + "\n")
-        BYTED_LANE_CONFIG.chmod(0o600)
-
-    skills = install_byted_lane_skills(bundle_root)
-    BYTED_LANE_UNIT.parent.mkdir(parents=True, exist_ok=True)
-    unit = "\n".join([
-        "[Unit]",
-        "Description=byted-lane Chrome lane configuration daemon",
-        "After=default.target",
-        "",
-        "[Service]",
-        f"ExecStart={LOCAL_BIN / 'bun'} run {BYTED_LANE_RUNTIME / 'daemon' / 'index.ts'}",
-        f"WorkingDirectory={BYTED_LANE_RUNTIME}",
-        f"Environment=PATH={LOCAL_BIN}:/usr/local/bin:/usr/bin:/bin",
-        "Restart=on-failure",
-        "RestartSec=1",
-        "",
-        "[Install]",
-        "WantedBy=default.target",
-        "",
-    ])
-    BYTED_LANE_UNIT.write_text(unit)
-    BYTED_LANE_UNIT.chmod(0o644)
-    systemctl = executable("systemctl")
-    if not systemctl:
-        raise RuntimeError("systemctl is required to persist the byted-lane daemon on Linux")
-    run([systemctl, "--user", "daemon-reload"], env=command_env())
-    run([systemctl, "--user", "enable", "byted-lane.service"], env=command_env())
-    run([systemctl, "--user", "restart", "byted-lane.service"], env=command_env())
-    for _ in range(50):
-        status = byted_lane_status()
-        if status:
-            break
-        time.sleep(0.1)
-    else:
-        raise RuntimeError("byted-lane daemon did not become ready on 127.0.0.1:38999")
-    return {
-        "version": BYTED_LANE_VERSION,
-        "bundle_path": str(bundle_root),
-        "runtime_path": str(BYTED_LANE_RUNTIME),
-        "extension_path": str(BYTED_LANE_EXTENSION),
-        "extension": extension,
-        "cli_path": str(cli_link),
-        "bun_version": BUN_VERSION,
-        "systemd_unit": str(BYTED_LANE_UNIT),
-        "config_preexisting": config_preexisting,
-        "safe_default": byted_lane_config_is_safe_default(json.loads(BYTED_LANE_CONFIG.read_text())),
-        "skills": skills,
-        "daemon": status,
-    }
-
-
-def verify_byted_lane() -> dict[str, Any]:
-    status = None
-    for _ in range(100):
-        status = byted_lane_status()
-        extension = status.get("extension", {}) if status else {}
-        config = status.get("config", {}) if status else {}
-        if (
-            extension.get("connected")
-            and extension.get("lastAppliedOk") is True
-            and extension.get("lastAppliedRevision") == config.get("revision")
-        ):
-            break
-        time.sleep(0.1)
-    else:
-        raise RuntimeError("byted-lane extension did not connect and apply the current revision")
-    return {
-        "ok": True,
-        "daemon_pid": status["daemon"]["pid"],
-        "extension": status["extension"],
-        "config": status["config"],
-        "safe_default": byted_lane_config_is_safe_default(json.loads(BYTED_LANE_CONFIG.read_text())),
-    }
 
 
 def ensure_x_display() -> None:
@@ -1471,16 +1144,6 @@ def verify_bridge() -> dict[str, Any]:
     }
 
 
-def minimal_cli_env() -> dict[str, str]:
-    home = str(pathlib.Path.home())
-    return {
-        "HOME": home,
-        "USER": getpass.getuser(),
-        "LOGNAME": getpass.getuser(),
-        "PATH": "/usr/bin:/bin",
-    }
-
-
 def file_has_nonempty_text(path: pathlib.Path) -> bool:
     try:
         return path.is_file() and bool(path.read_text().strip())
@@ -1493,16 +1156,6 @@ def checksum_matches(path: pathlib.Path, expected: str) -> bool:
         return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == expected
     except OSError:
         return False
-
-
-def probe_command_version(path: pathlib.Path, env: dict[str, str]) -> str | None:
-    if not path.is_file():
-        return None
-    try:
-        result = run([str(path), "--version"], check=False, env=env)
-    except OSError:
-        return None
-    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def environment_health() -> dict[str, Any]:
@@ -1585,58 +1238,19 @@ def environment_health() -> dict[str, Any]:
     ):
         issue("bridge_unavailable", "bridge", "the checksum-pinned Bridge installation or token is incomplete")
 
-    bun_path = LOCAL_BIN / "bun"
-    cli_path = LOCAL_BIN / "byted-lane"
     toolchain_checks = {
         "node": executable("node") is not None,
-        "bun_version": probe_command_version(bun_path, command_env()),
-        "byted_lane_cli_version": probe_command_version(cli_path, minimal_cli_env()),
         "codex": executable("codex") is not None,
         "chrome_devtools_mcp": executable("chrome-devtools-mcp") is not None,
         "playwright_mcp": executable("playwright-mcp") is not None,
     }
     if not (
         toolchain_checks["node"]
-        and toolchain_checks["bun_version"] == BUN_VERSION
-        and toolchain_checks["byted_lane_cli_version"] == BYTED_LANE_VERSION
         and toolchain_checks["codex"]
         and toolchain_checks["chrome_devtools_mcp"]
         and toolchain_checks["playwright_mcp"]
     ):
-        issue("toolchain_unavailable", "tools", "the pinned server browser toolchain or CLI launcher is unavailable")
-
-    try:
-        lane_state = byted_lane_detect_state()
-    except (OSError, ValueError, RuntimeError) as error:
-        lane_state = {"daemon": None, "config": None, "skills": {}, "detection_error": str(error)}
-    lane_status = lane_state.get("daemon") or {}
-    lane_extension = lane_status.get("extension") or {}
-    lane_status_config = lane_status.get("config") or {}
-    lane_config = lane_state.get("config")
-    lane_runtime_ready = bool(
-        lane_state.get("bundle_asset_valid")
-        and lane_state.get("runtime_ready")
-        and lane_state.get("cli_installed")
-        and lane_state.get("systemd_unit_installed")
-        and lane_state.get("extension_id")
-        and BYTED_LANE_EXTERNAL_CRX.is_file()
-    )
-    if not lane_runtime_ready:
-        issue("byted_lane_runtime_unavailable", "byted-lane", "the bundled runtime, external CRX, CLI, or unit is incomplete")
-    if not lane_status.get("daemon"):
-        issue("byted_lane_daemon_unavailable", "byted-lane", "the byted-lane daemon status endpoint is unavailable")
-    lane_extension_ready = bool(
-        lane_extension.get("connected")
-        and lane_extension.get("lastAppliedOk") is True
-        and lane_extension.get("lastAppliedRevision") == lane_status_config.get("revision")
-    )
-    if not lane_extension_ready:
-        issue("byted_lane_extension_unavailable", "byted-lane", "the extension is disconnected or has not applied the current revision")
-    if not isinstance(lane_config, dict):
-        issue("byted_lane_config_invalid", "byted-lane", "the persisted byted-lane config is missing or invalid")
-    missing_skills = [name for name, present in lane_state.get("skills", {}).items() if not present]
-    if missing_skills:
-        issue("skills_missing", "skills", f"missing installed Skills: {', '.join(missing_skills)}")
+        issue("toolchain_unavailable", "tools", "the server browser Node and MCP toolchain is unavailable")
 
     mcp_state = codex_mcp_detect_state()
     if mcp_state.get("ok") is not True:
@@ -1651,13 +1265,6 @@ def environment_health() -> dict[str, Any]:
             "xpra": xpra_checks,
             "bridge": bridge_checks,
             "toolchain": toolchain_checks,
-            "byted_lane": {
-                "runtime_ready": lane_runtime_ready,
-                "daemon_ready": bool(lane_status.get("daemon")),
-                "extension_ready": lane_extension_ready,
-                "safe_default": lane_state.get("safe_default"),
-                "skills": lane_state.get("skills", {}),
-            },
             "codex_mcp": mcp_state,
         },
         "repair_command": f"{SCRIPT_DIR / 'ensure_server_browser.py'} --repair --apply",
@@ -1668,7 +1275,6 @@ def initialize_full(args: argparse.Namespace) -> dict[str, Any]:
     ensure_permissions()
     system = ensure_system_packages()
     ensure_user_tools()
-    byted_lane = install_byted_lane_runtime()
     chrome = ensure_chrome()
     bridge = install_bridge()
     codex = configure_codex()
@@ -1679,15 +1285,12 @@ def initialize_full(args: argparse.Namespace) -> dict[str, Any]:
     xpra = ensure_xpra(args.show_credential)
     xpra["restarted_for_client_install"] = xpra_restarted_for_client
     bridge_probe = verify_bridge()
-    byted_lane_probe = verify_byted_lane()
     return {
         "initialized": True,
         "system": system,
         "chrome": chrome,
         "xpra": xpra,
         "bridge": bridge,
-        "byted_lane": byted_lane,
-        "byted_lane_probe": byted_lane_probe,
         "codex": codex,
         "bridge_probe": bridge_probe,
     }

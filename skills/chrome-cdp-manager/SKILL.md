@@ -51,8 +51,8 @@ On a server without a usable Codex/ChatGPT extension connection, skip repeated e
 Use `scripts/server_browser.py` as the single entrypoint on Linux servers:
 
 1. Run `scripts/ensure_server_browser.py` first. It is read-only by default and returns a unified health result with stable issue codes, checks, and the exact repair command without revealing credentials.
-2. If health fails and the user has authorized host repair, run `scripts/ensure_server_browser.py --repair --apply`. It reuses the idempotent initializer, repairs the full managed environment, then runs the same health contract again. A healthy environment is a no-op: no apt/npm work, Chrome restart, extension reinstall, or lane config reset.
-3. `server_browser.py detect` remains the detailed read-only inventory. `server_browser.py init --apply` is also idempotent and may be called directly; it installs `fonts-noto-cjk` only when needed, pins the Chrome LNA compatibility flags, and installs the bundled byted-lane runtime, extension, daemon and integration Skills. Add `--show-credential` when the current task may need human UI access.
+2. If health fails and the user has authorized host repair, run `scripts/ensure_server_browser.py --repair --apply`. It reuses the idempotent initializer, repairs the managed browser environment, then runs the same health contract again. A healthy environment is a no-op: no apt/npm work, Chrome restart, or Bridge reinstall.
+3. `server_browser.py detect` remains the detailed read-only inventory. `server_browser.py init --apply` is also idempotent and may be called directly; it installs the Chrome/Xpra system packages, installs `fonts-noto-cjk` only when needed, pins the Chrome LNA compatibility flags, provisions the Playwright Bridge and configures browser MCP bindings. Add `--show-credential` when the current task may need human UI access.
 4. For an existing host, use `bridge --apply`, `configure-codex --apply`, and `bridge --verify` to repair and prove the Playwright Bridge path independently.
 5. If automation reaches a login, MFA, CAPTCHA, consent, certificate prompt, ambiguous visual state, or repeated element-location failure, automatically run `server_browser.py ui --ensure --show-credential`. Return its `url` and `password` directly to the user; do not ask them to construct an SSH tunnel or choose a local-access mode.
 6. The Xpra page shows the same persistent Chrome controlled through CDP/Bridge. After the user clears the blocker, re-probe the target page and continue the original task. Do not launch another browser or profile.
@@ -118,7 +118,6 @@ The repository `README.md` may use `skills/chrome-cdp-manager/...` paths because
 - Do not delete diagnostic state while the profile is still in use; classify the live process first and report the actual mismatch.
 - Prevent duplicate launches with the lock dir.
 - Return structured JSON so callers do not parse logs.
-- Treat a configured business lane as valid state. Health requires a valid config plus a connected extension that applied the current revision; it must not require or restore the safe default unless initialization is creating the config for the first time.
 - Use `ensure_server_browser.py --repair --apply` for automatic recovery. Do not build a second repair path: repeated repair must converge through the same idempotent initializer.
 - Configure the stable HTTP endpoint at MCP process startup; never hardcode the rotating `webSocketDebuggerUrl` from `session.json`.
 - Do not pass `port` / `ws_url` per tool call. If the MCP process started without the fixed endpoint, update its host configuration and restart that MCP process.

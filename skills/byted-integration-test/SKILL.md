@@ -54,7 +54,7 @@ cd <repo>/<subapp> && pnpm dev                    # 端口看项目，常见 789
 
 按下面顺序检查，缺什么告诉用户什么。能跑到 byted-lane 就走主路径，否则走 fallback。
 
-### byted-lane（主路径，macOS 或已初始化的 Linux 服务端 Chrome）
+### byted-lane（主路径，macOS 或已配置的 Linux 服务端 Chrome）
 
 **这一步是联调最关键的第一步，跳过 = 后续全白调。**
 
@@ -91,7 +91,7 @@ byted-lane config show    # 关键：lane.enabled / lane.headers / proxy.mode
 | 本地 dev URLRewrite 不生效且 `proxy.mode=direct` | `byted-lane proxy system`，然后 reload chrome tab |
 | 纯 PPE 页面在 `fixed` 下 404/网络异常 | `byted-lane proxy direct`，然后 reload chrome tab |
 | `proxy.mode=fixed` 但目标错误 | `byted-lane proxy fixed <scheme>://<host>:<port>` 设置正确上游 |
-| Linux 服务端未初始化 | 运行 `chrome-cdp-manager/scripts/server_browser.py init --apply`，再复查 status |
+| Linux 服务端缺少 byted-lane 组件 | 按统一环境配置指南安装 byted-lane，再复查 status |
 | 其它环境无法修复 | 走 **Fallback A** |
 
 byted-lane 详细见 `byted-lane` skill。

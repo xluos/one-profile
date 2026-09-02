@@ -1,6 +1,6 @@
 ---
 name: byted-lane
-description: byted-lane CLI + Chrome 扩展的使用指南。控制泳道头（x-tt-env / x-use-ppe）和 Chrome 代理模式（direct / system / fixed 三态），支持 macOS 和由 chrome-cdp-manager 初始化的 Linux 服务端 Chrome。当用户说"设置泳道"、"切到 ppe/boe 环境"、"走系统代理"、"代理走 127.0.0.1:8899"，或者要排查"为什么我的请求没带泳道头"、"插件没连上"、"daemon 跑没跑起来"时使用。
+description: byted-lane CLI + Chrome 扩展的使用指南。控制泳道头（x-tt-env / x-use-ppe）和 Chrome 代理模式（direct / system / fixed 三态），支持 macOS 和 Linux 服务端的受管 Chrome。当用户说"设置泳道"、"切到 ppe/boe 环境"、"走系统代理"、"代理走 127.0.0.1:8899"，或者要排查"为什么我的请求没带泳道头"、"插件没连上"、"daemon 跑没跑起来"时使用。
 ---
 
 # byted-lane
@@ -193,7 +193,7 @@ byted-lane logs -f            # tail -f
 
 ### Linux 服务端
 
-由 `chrome-cdp-manager/scripts/server_browser.py init --apply` 初始化的服务器会同时安装：
+按照统一环境配置指南安装 Linux 组件，安装结果应包含：
 
 - `~/.local/bin/bun` 与 `~/.local/bin/byted-lane`
 - 用户级 `byted-lane.service`
@@ -209,7 +209,7 @@ journalctl --user -u byted-lane -n 100 --no-pager
 byted-lane status
 ```
 
-初始化后的默认配置是 lane 关闭、无环境、Chrome 直连。只有拿到具体泳道和目标业务 host 后才创建
+初始配置是 lane 关闭、无环境、Chrome 直连。只有拿到具体泳道和目标业务 host 后才创建
 带 include 的环境。Chrome 复用/重启由 `chrome-cdp-manager` 负责；不要另起 headless Chrome，也不要
 手工用 InitScript 或 CDP request interception 代替首次导航的扩展注头。
 

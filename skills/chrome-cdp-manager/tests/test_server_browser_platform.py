@@ -101,22 +101,39 @@ class XpraPlatformTests(unittest.TestCase):
         self.assertIn("xpra-client", apt_install.call_args.args[0])
         self.assertTrue(result["xpra_client"]["installed"])
 
+    def test_user_tools_install_browser_mcp_toolchain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            local_bin = pathlib.Path(directory) / "bin"
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server_browser, "LOCAL_BIN", local_bin), mock.patch.object(
+                server_browser.shutil, "which", return_value="/usr/bin/npm"
+            ), mock.patch.object(server_browser, "run", side_effect=fake_run):
+                server_browser.ensure_user_tools()
+
+        installed_packages = commands[-1][5:]
+        self.assertEqual(
+            installed_packages,
+            ["@openai/codex@latest", "chrome-devtools-mcp@latest", "@playwright/mcp@latest"],
+        )
+
     def test_full_initialization_restarts_xpra_after_client_install(self) -> None:
         args = SimpleNamespace(show_credential=False)
         system = {"xpra_client": {"installed": True}}
         with mock.patch.object(server_browser, "ensure_permissions"), mock.patch.object(
             server_browser, "ensure_system_packages", return_value=system
         ), mock.patch.object(server_browser, "ensure_user_tools"), mock.patch.object(
-            server_browser, "install_byted_lane_runtime", return_value={}
-        ), mock.patch.object(server_browser, "ensure_chrome", return_value={}), mock.patch.object(
+            server_browser, "ensure_chrome", return_value={}), mock.patch.object(
             server_browser, "install_bridge", return_value={}
         ), mock.patch.object(server_browser, "configure_codex", return_value={}), mock.patch.object(
             server_browser, "managed_xpra_process", return_value=(1234, ["xpra"])
         ), mock.patch.object(server_browser, "stop_managed_xpra") as stop_xpra, mock.patch.object(
             server_browser, "ensure_xpra", return_value={}
-        ), mock.patch.object(server_browser, "verify_bridge", return_value={}), mock.patch.object(
-            server_browser, "verify_byted_lane", return_value={}
-        ):
+        ), mock.patch.object(server_browser, "verify_bridge", return_value={}):
             result = server_browser.initialize_full(args)
 
         stop_xpra.assert_called_once_with()
@@ -132,17 +149,6 @@ class XpraPlatformTests(unittest.TestCase):
                 extracted = server_browser.prepare_bridge_extension()
                 self.assertEqual(extracted, bridge_dir)
                 self.assertTrue(server_browser.bridge_directory_valid(extracted))
-
-    def test_bundled_byted_lane_asset_is_valid_and_extractable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            state_dir = pathlib.Path(directory)
-            bundle_root = state_dir / f"byted-lane-bundle-{server_browser.BYTED_LANE_VERSION}"
-            with mock.patch.object(server_browser, "STATE_DIR", state_dir), mock.patch.object(
-                server_browser, "BYTED_LANE_ROOT", bundle_root
-            ):
-                extracted = server_browser.prepare_byted_lane_bundle()
-                self.assertEqual(extracted, bundle_root)
-                self.assertTrue(server_browser.byted_lane_bundle_valid(extracted))
 
     def test_lna_launch_state_requires_real_main_process_flags(self) -> None:
         required_args = [
@@ -229,57 +235,6 @@ class XpraPlatformTests(unittest.TestCase):
         self.assertNotIn(server_browser.BRIDGE_ID, settings)
         self.assertEqual(settings["other"], {"state": 1})
 
-    def test_byted_lane_external_crx_uses_stable_derived_id(self) -> None:
-        extension_id = "abcdefghijklmnopabcdefghijklmnop"
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            extension = root / "extension"
-            extension.mkdir()
-            (extension / "manifest.json").write_text('{"name":"byted-lane","version":"0.1.0"}')
-            commands = []
-
-            def fake_run(command, **_kwargs):
-                commands.append(command)
-                if any(value.startswith("--pack-extension=") for value in command):
-                    packed_root = pathlib.Path(next(
-                        value.split("=", 1)[1] for value in command if value.startswith("--pack-extension=")
-                    )).parent
-                    (packed_root / "byted-lane.crx").write_bytes(b"crx")
-                    (packed_root / "byted-lane.pem").write_text("pem")
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-            with mock.patch.object(server_browser, "STATE_DIR", root), mock.patch.object(
-                server_browser, "BYTED_LANE_EXTENSION", extension
-            ), mock.patch.object(server_browser, "BYTED_LANE_CRX", root / "byted-lane.crx"), mock.patch.object(
-                server_browser, "BYTED_LANE_PEM", root / "byted-lane.pem"
-            ), mock.patch.object(
-                server_browser, "BYTED_LANE_EXTENSION_ID_FILE", root / "byted-lane-extension-id"
-            ), mock.patch.object(
-                server_browser, "BYTED_LANE_EXTERNAL_CRX", pathlib.Path("/opt/google/chrome/extensions/byted-lane.crx")
-            ), mock.patch.object(server_browser, "system_chrome_path", return_value="/usr/bin/google-chrome"), mock.patch.object(
-                server_browser, "derive_chrome_extension_id", return_value=extension_id
-            ), mock.patch.object(server_browser, "run", side_effect=fake_run):
-                result = server_browser.install_byted_lane_extension()
-
-        self.assertEqual(result["extension_id"], extension_id)
-        self.assertEqual(result["external_config"], f"/opt/google/chrome/extensions/{extension_id}.json")
-        self.assertTrue(any(command[-1] == result["external_config"] for command in commands))
-
-    def test_byted_lane_cli_launcher_uses_absolute_bun_path(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            local_bin = pathlib.Path(directory) / "bin"
-            local_bin.mkdir()
-            cli_entry = pathlib.Path(directory) / "runtime with spaces" / "cli" / "index.ts"
-            cli_entry.parent.mkdir(parents=True)
-            cli_entry.write_text("// cli")
-            with mock.patch.object(server_browser, "LOCAL_BIN", local_bin):
-                launcher = server_browser.install_byted_lane_cli_launcher(cli_entry)
-            content = launcher.read_text()
-        self.assertIn(str(local_bin / "bun"), content)
-        self.assertIn("'" + str(cli_entry) + "'", content)
-        self.assertIn('"$@"', content)
-        self.assertFalse(launcher.is_symlink())
-
     def test_gateway_process_can_be_reused_after_skill_path_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_dir = pathlib.Path(directory)
@@ -348,34 +303,11 @@ class XpraPlatformTests(unittest.TestCase):
             "https://example.test/?token=<redacted>",
         )
 
-    def test_healthy_active_lane_does_not_require_safe_default(self) -> None:
+    def test_healthy_browser_environment_only_checks_browser_components(self) -> None:
         chrome_state = {
             "matched": True,
             "managed_process_verified": True,
             "network_services": [{"pid": 22, "required_features_present": True}],
-        }
-        lane_state = {
-            "bundle_asset_valid": True,
-            "runtime_ready": True,
-            "cli_installed": True,
-            "systemd_unit_installed": True,
-            "extension_id": "abcdefghijklmnopabcdefghijklmnop",
-            "daemon": {
-                "daemon": {"pid": 33},
-                "extension": {
-                    "connected": True,
-                    "lastAppliedOk": True,
-                    "lastAppliedRevision": 7,
-                },
-                "config": {"revision": 7},
-            },
-            "config": {
-                "lane": {"enabled": True, "headers": {}},
-                "environments": [{"env": "ppe_test", "enabled": True}],
-                "proxy": {"mode": "direct"},
-            },
-            "safe_default": False,
-            "skills": {"byted-lane": True, "byted-integration-test": True},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -383,23 +315,12 @@ class XpraPlatformTests(unittest.TestCase):
             token.write_text("token")
             external_config = root / "bridge.json"
             external_config.write_text("{}")
-            lane_crx = root / "byted-lane.crx"
-            lane_crx.write_bytes(b"crx")
-            local_bin = root / "bin"
-            local_bin.mkdir()
-            (local_bin / "bun").write_text("bun")
-            (local_bin / "byted-lane").write_text("cli")
-
-            def fake_run(command, **_kwargs):
-                version = server_browser.BUN_VERSION if pathlib.Path(command[0]).name == "bun" else server_browser.BYTED_LANE_VERSION
-                return SimpleNamespace(returncode=0, stdout=version + "\n", stderr="")
 
             with mock.patch.object(server_browser.sys, "platform", "linux"), mock.patch.object(
                 server_browser, "STATE_DIR", root
-            ), mock.patch.object(server_browser, "LOCAL_BIN", local_bin
             ), mock.patch.object(server_browser, "BRIDGE_EXTERNAL_CONFIG", external_config), mock.patch.object(
-                server_browser, "BYTED_LANE_EXTERNAL_CRX", lane_crx
-            ), mock.patch.object(server_browser, "system_chrome_path", return_value="/usr/bin/google-chrome"), mock.patch.object(
+                server_browser, "system_chrome_path", return_value="/usr/bin/google-chrome"
+            ), mock.patch.object(
                 server_browser, "managed_chrome_launch_state", return_value=chrome_state
             ), mock.patch.object(server_browser, "port_open", return_value=True), mock.patch.object(
                 server_browser, "executable", side_effect=lambda name: f"/usr/bin/{name}"
@@ -412,8 +333,6 @@ class XpraPlatformTests(unittest.TestCase):
             ) as xpra_client_probe, mock.patch.object(server_browser, "file_mode", return_value="0o600"), mock.patch.object(
                 server_browser, "bridge_directory_valid", return_value=True
             ), mock.patch.object(server_browser, "bridge_profile_state", return_value={"version": server_browser.BRIDGE_VERSION}), mock.patch.object(
-                server_browser, "run", side_effect=fake_run
-            ), mock.patch.object(server_browser, "byted_lane_detect_state", return_value=lane_state), mock.patch.object(
                 server_browser, "codex_mcp_detect_state", return_value={"ok": True}
             ):
                 health = server_browser.environment_health()
@@ -425,7 +344,7 @@ class XpraPlatformTests(unittest.TestCase):
                 missing_client_health = server_browser.environment_health()
 
         self.assertTrue(health["ok"])
-        self.assertFalse(health["checks"]["byted_lane"]["safe_default"])
+        self.assertEqual(set(health["checks"]), {"chrome", "xpra", "bridge", "toolchain", "codex_mcp"})
         self.assertEqual(health["issues"], [])
         self.assertFalse(missing_client_health["ok"])
         self.assertEqual(
@@ -449,9 +368,9 @@ class XpraPlatformTests(unittest.TestCase):
             root = pathlib.Path(directory)
             with mock.patch.object(server_browser.sys, "platform", "linux"), mock.patch.object(
                 server_browser, "STATE_DIR", root
-            ), mock.patch.object(server_browser, "LOCAL_BIN", root / "bin"), mock.patch.object(
+            ), mock.patch.object(
                 server_browser, "BRIDGE_EXTERNAL_CONFIG", root / "bridge.json"
-            ), mock.patch.object(server_browser, "BYTED_LANE_EXTERNAL_CRX", root / "lane.crx"), mock.patch.object(
+            ), mock.patch.object(
                 server_browser, "system_chrome_path", return_value=None
             ), mock.patch.object(
                 server_browser,
@@ -468,10 +387,8 @@ class XpraPlatformTests(unittest.TestCase):
             ), mock.patch.object(server_browser, "file_mode", return_value=None), mock.patch.object(
                 server_browser, "bridge_directory_valid", return_value=False
             ), mock.patch.object(server_browser, "bridge_profile_state", return_value=None), mock.patch.object(
-                server_browser,
-                "byted_lane_detect_state",
-                return_value={"daemon": None, "config": None, "skills": {"byted-lane": False}},
-            ), mock.patch.object(server_browser, "codex_mcp_detect_state", return_value={"ok": False}):
+                server_browser, "codex_mcp_detect_state", return_value={"ok": False}
+            ):
                 health = server_browser.environment_health()
 
         codes = {item["code"] for item in health["issues"]}
@@ -485,11 +402,6 @@ class XpraPlatformTests(unittest.TestCase):
             "xpra_client_unavailable",
             "bridge_unavailable",
             "toolchain_unavailable",
-            "byted_lane_runtime_unavailable",
-            "byted_lane_daemon_unavailable",
-            "byted_lane_extension_unavailable",
-            "byted_lane_config_invalid",
-            "skills_missing",
             "codex_mcp_unavailable",
         } <= codes)
 

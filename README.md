@@ -34,9 +34,9 @@ skills/byted-integration-test/
 
 控制面按目标选择：本机真实登录态和日常交互优先 Codex/ChatGPT Chrome 扩展；请求级调试、性能和内存分析使用 Chrome DevTools MCP；服务端多步骤流程、断言和回归使用带 token 的 Playwright MCP Bridge。
 
-服务端统一由 `scripts/server_browser.py` 检测和初始化。遇到登录、MFA、验证码或定位不到元素时，Skill 自动启动/复用 Xpra，并直接给出 `http://<server-ip>:14500/` 和密码；没有 local/tunnel 选择。外部 14500 由标准 HTTP/1.1/WebSocket 网关承接，Xpra 本体只在 `127.0.0.1:14501`；脚本拒绝在公网地址启动这种无 TLS 模式，CDP 也始终保持 `127.0.0.1:9222`。脚本会固化并校验 Chrome 151/152 的 LNA 兼容参数，同时安装官方 Playwright MCP Bridge，以及 checksum 固定的 byted-lane Bun runtime、用户级 daemon、Chrome 扩展和联调 Skills；byted-lane 默认保持关闭，后续按业务域名精确配置。
+服务端浏览器统一由 `scripts/server_browser.py` 检测和初始化。遇到登录、MFA、验证码或定位不到元素时，Skill 自动启动/复用 Xpra，并直接给出 `http://<server-ip>:14500/` 和密码；没有 local/tunnel 选择。外部 14500 由标准 HTTP/1.1/WebSocket 网关承接，Xpra 本体只在 `127.0.0.1:14501`；脚本拒绝在公网地址启动这种无 TLS 模式，CDP 也始终保持 `127.0.0.1:9222`。脚本会固化并校验 Chrome 151/152 的 LNA 兼容参数，安装官方 Playwright MCP Bridge，并配置 Chrome DevTools MCP、Playwright MCP 与 Codex 的固定 CDP 绑定。
 
-服务端巡检使用 `scripts/ensure_server_browser.py`：默认只读并输出稳定 issue code；授权后使用 `--repair --apply` 自动走同一个幂等初始化器。健康环境重复执行不会重装工具、重启 Chrome 或修改现有有效泳道。
+服务端巡检使用 `scripts/ensure_server_browser.py`：默认只读并输出稳定 issue code；授权后使用 `--repair --apply` 自动走同一个幂等初始化器。健康环境重复执行不会重装工具或重启 Chrome。
 
 每次服务端 Chrome 启动或 Xpra 被确保可用时，脚本都会把可见 Chrome 主窗口移动到虚拟屏幕左上角并调整为 `100% × 100%`，再把实时屏幕和窗口尺寸写入 JSON 输出。
 

@@ -82,7 +82,7 @@ byted-lane 的 declarativeNetRequest 支持 **Environment Profile 域名过滤 +
 
 ## 何时不得不用 fallback
 
-- 环境没有由 `chrome-cdp-manager` 初始化 byted-lane（Windows 或未初始化的 Linux）
+- 环境尚未配置 byted-lane（Windows 或未完成环境配置的 Linux）
 - byted-lane daemon 反复起不来 / 扩展反复 disconnect 修不好
 - 临时 sanity check（不想创建 byted-lane Environment Profile）
 
